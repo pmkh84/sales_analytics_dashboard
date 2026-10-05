@@ -1,10 +1,14 @@
 import axios from "axios";
 import type {
   Category,
+  CreatedSale,
+  CreateSaleRequest,
+  CustomerOption,
   DashboardData,
   DateRange,
   Insight,
   Product,
+  ProductOption,
   SalesPage,
   Summary,
   TrendPoint,
@@ -21,6 +25,8 @@ export function errorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
     const detail: unknown = error.response?.data?.detail;
     if (typeof detail === "string") return detail;
+    if (error.response?.status === 422)
+      return "Check the selected customer, product, and positive whole-number quantity.";
     if (error.code === "ECONNABORTED")
       return "The request timed out. Please try again.";
     if (!error.response)
@@ -58,6 +64,21 @@ export async function getSales(
       signal,
     })
   ).data;
+}
+export async function getCustomers(signal: AbortSignal) {
+  return (await api.get<CustomerOption[]>("/api/customers", { signal })).data;
+}
+export async function getProducts(signal: AbortSignal) {
+  return (await api.get<ProductOption[]>("/api/products", { signal })).data;
+}
+export async function createSale(request: CreateSaleRequest) {
+  return (await api.post<CreatedSale>("/api/sales", request)).data;
+}
+export async function deleteSale(id: number): Promise<void> {
+  await api.delete(`/api/sales/${id}`);
+}
+export async function updateSale(id: number, request: CreateSaleRequest) {
+  return (await api.patch<CreatedSale>(`/api/sales/${id}`, request)).data;
 }
 export async function getInsights(range: DateRange) {
   return (

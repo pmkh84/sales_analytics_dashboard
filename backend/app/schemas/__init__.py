@@ -37,6 +37,8 @@ class TopProduct(BaseModel):
 
 class RecentSale(BaseModel):
     id: int
+    customer_id: int
+    product_id: int
     customer_name: str
     product_name: str
     category: str
@@ -50,6 +52,30 @@ class SalesPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class CreateSaleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    customer_id: int = Field(strict=True, gt=0, le=2147483647)
+    product_id: int = Field(strict=True, gt=0, le=2147483647)
+    quantity: int = Field(strict=True, gt=0, le=2147483647)
+
+
+class CreatedSale(CreateSaleRequest):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    total_amount: float
+    created_at: datetime
+
+
+class CustomerOption(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+
+
+class ProductOption(CustomerOption):
+    price: float
 
 
 class AskRequest(BaseModel):

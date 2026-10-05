@@ -33,6 +33,8 @@ export interface Product {
 }
 export interface Sale {
   id: number;
+  customer_id: number;
+  product_id: number;
   customer_name: string;
   product_name: string;
   category: string;
@@ -45,6 +47,23 @@ export interface SalesPage {
   total: number;
   limit: number;
   offset: number;
+}
+export interface CustomerOption {
+  id: number;
+  name: string;
+}
+export interface ProductOption extends CustomerOption {
+  price: number;
+}
+export interface CreateSaleRequest {
+  customer_id: number;
+  product_id: number;
+  quantity: number;
+}
+export interface CreatedSale extends CreateSaleRequest {
+  id: number;
+  total_amount: number;
+  created_at: string;
 }
 export interface Insight {
   title: string;

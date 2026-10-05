@@ -132,6 +132,8 @@ def recent_sales(db: Session, period: Period, limit: int, offset: int) -> dict:
     items = [
         {
             "id": sale.id,
+            "customer_id": sale.customer_id,
+            "product_id": sale.product_id,
             "customer_name": customer,
             "product_name": product,
             "category": category,

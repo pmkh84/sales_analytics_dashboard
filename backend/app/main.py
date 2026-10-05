@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import get_db
-from app.routers import ai, dashboard
+from app.routers import ai, dashboard, sales
 from app.schemas import Health
 
 app = FastAPI(title="AI Sales Analytics API", version="1.0.0")
@@ -17,11 +17,12 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[get_settings().frontend_url],
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE", "PATCH"],
     allow_headers=["Content-Type"],
 )
 app.include_router(dashboard.router)
 app.include_router(ai.router)
+app.include_router(sales.router)
 
 
 @app.exception_handler(SQLAlchemyError)

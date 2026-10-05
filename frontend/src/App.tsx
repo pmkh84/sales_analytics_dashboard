@@ -73,6 +73,7 @@ export default function App() {
             revision={revision}
             page={page}
             setPage={setPage}
+            onSalesChanged={() => setRevision((value) => value + 1)}
           />
         )
       )}

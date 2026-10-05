@@ -1,5 +1,111 @@
 # Verification — 2026-10-05
 
+## Edit Sale feature
+
+- PostgreSQL integration suite: **54 passed**. Edit tests verify persisted changes to
+  customer/product/quantity, current-price decimal totals, unchanged ID/date/order
+  count, refreshed analytics, duplicate-name IDs, 404s, input validation, forbidden
+  client totals, numeric overflow, rollback, and PATCH CORS.
+- Ruff and TypeScript/Vite production build passed. Uvicorn startup passed on port
+  8001. No browser is connected; visual interaction checks remain manual.
+- `PATCH /api/sales/{sale_id}` requires all three fields (`customer_id`, `product_id`,
+  `quantity`) using the existing request validation and returns the existing sale
+  response shape with HTTP 200. Recent sales now also include customer/product IDs.
+- Add and Edit share `SaleForm.tsx` (formerly `AddSaleForm.tsx`). Save closes/reset
+  state and invokes `onSalesChanged`, incrementing revision and refetching sales,
+  KPIs, and charts without a full browser reload. No migration is required.
+
+### Manual Edit Sale test
+
+1. Start backend/frontend using the README commands. Open `http://localhost:5173`
+   and select Last 30 days. Add a disposable sale. Note its ID, amount, quantity,
+   total revenue, and total orders.
+2. Click **Edit** on its row. Verify the title identifies the sale and the customer,
+   product, and quantity match that row. Cancel, then reopen; original values remain.
+3. Change customer and product. Note the new unit price. Try blank quantity, 0,
+   -1, and 1.5: saving must be blocked. Clear either dropdown: saving must be blocked.
+4. Select both options, enter quantity 3, and save. With browser network throttling,
+   verify “Saving…” and disabled controls. Expect PATCH with only the three editable
+   fields, HTTP 200, and the modal closing after success.
+5. Verify the row keeps its ID/date but shows the new customer/product, quantity 3,
+   and amount equal to the new unit price times 3. Total orders stays constant;
+   total revenue changes by new amount minus old amount. Check revenue, category,
+   and top-product charts refetch (ranking may change). Reload to verify persistence.
+6. Repeat from the Sales page, including a later page. On success the existing
+   revision flow returns the list to page 1. Reopen Edit to verify saved values.
+7. In `http://localhost:8000/docs`, PATCH a missing/deleted sale ID with valid
+   customer/product IDs and quantity 1: expect 404. With an existing sale, try
+   nonexistent customer/product IDs: expect 404. Try quantity 0 or an extra
+   `total_amount`: expect 422 and the stored sale remains unchanged.
+8. Open Edit, wait for options, then stop the backend and save. Verify an error,
+   preserved form inputs, and re-enabled controls. Restart the backend and retry.
+9. Smoke-test Add and Delete to confirm the shared form and refresh still work.
+
+## Delete Sale feature
+
+- PostgreSQL integration suite: **37 passed**. Delete coverage verifies 204 with no
+  body, persisted removal, preserved customer/product records, repeat/missing ID 404,
+  invalid ID 422, rollback after commit failure, DELETE CORS, and updated sales,
+  orders, revenue, revenue trend, category totals, and top products.
+- Ruff and TypeScript/Vite production build passed. Uvicorn startup, live database
+  health, and the DELETE endpoint's OpenAPI registration passed on port 8001.
+- No models or schemas added. Both create and delete call `onSalesChanged`, which
+  increments App's existing revision. This refetches analytics and remounts/refetches
+  the sales table at its first page without a browser reload.
+- No browser is connected in this session; visual interaction checks remain manual.
+
+### Manual Delete Sale test
+
+1. Start the backend and frontend with the README commands. Open
+   `http://localhost:5173`, select Last 30 days, and add a disposable sale with
+   quantity 2. Record its displayed order ID and amount, total orders, and revenue.
+2. Click that row's **Delete** button. Check the confirmation identifies the correct
+   order. Click Cancel: the row and totals must remain unchanged.
+3. Click Delete again and confirm. Expect `DELETE /api/sales/{id}` with 204 and an
+   empty body in browser Network tools. With network throttling, verify delete
+   buttons are disabled and the selected action reads “Deleting…” while pending.
+4. Verify the row disappears, total orders falls by 1, revenue falls by the recorded
+   amount, and revenue/category/product charts refetch. Reload to check persistence.
+5. In browser DevTools Console, repeat the deleted ID's request:
+   `fetch('http://localhost:8000/api/sales/ID', {method: 'DELETE'}).then(async r => console.log(r.status, await r.text()))`
+   Replace ID with the deleted order ID. Expect 404 and “Sale not found.”
+6. On the Sales page, delete a disposable sale from a later page. Verify the list
+   returns to page 1; navigate to Dashboard and check refreshed KPIs/charts.
+7. Stop the backend, then attempt deletion and confirm. Verify an error appears,
+   the row remains, and delete controls are re-enabled. Restart the backend and retry.
+
+## Add Sale feature
+
+- PostgreSQL integration suite: **28 passed** (including creation, current decimal price,
+  persisted record, refreshed analytics, invalid quantities, missing entities, forbidden
+  client total, and numeric overflow). Tests use isolated schemas and roll back their data.
+- Backend Ruff check and frontend TypeScript/Vite production build passed.
+- Uvicorn startup and live health/options requests passed on port 8001 (8000 was occupied).
+- New endpoints: `GET /api/customers`, `GET /api/products`, `POST /api/sales` (201).
+- The existing Sale model is unchanged; no migration is required.
+- Browser interaction was not verified in this session because no browser was connected.
+
+### Manual Add Sale test
+
+1. Start PostgreSQL and the backend/frontend using the README commands. Open
+   `http://localhost:5173` and select Last 30 days. Note total revenue and total orders.
+2. Beside Recent sales, click **Add Sale**. Verify customer and product options load.
+3. Select a customer and product; note the displayed unit price. Try an empty quantity,
+   `0`, `-1`, and `1.5`: submission must be blocked. Cancel and reopen to check reset.
+4. Select both options and enter quantity `2`. Click **Save Sale** once. During the
+   request, controls must be disabled. The modal should close after success.
+5. Verify the newest sale shows that customer/product, quantity 2, and twice the unit
+   price. Total orders increases by 1 and total revenue by the returned amount.
+   Check today's revenue chart, category totals, and top products where applicable.
+6. Reload the browser and verify the record persists. On the Sales page, go to a later
+   page, add another sale, and verify pagination returns to the newest records.
+7. Stop the backend before opening the form: verify a useful error and Retry button.
+   Restart it and retry. Stop it after options load and try saving: the form should
+   retain inputs and show an error. Restart it and submit again.
+8. In `http://localhost:8000/docs`, POST `/api/sales` with valid IDs and quantity 1:
+   expect 201. Try nonexistent customer/product IDs: expect 404. Try quantity 0,
+   fractional quantity, missing fields, or an extra `total_amount`: expect 422.
+
 ## Passed
 
 - PostgreSQL 17 Docker container started and reported healthy.

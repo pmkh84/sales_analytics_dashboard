@@ -1,26 +1,56 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowRight, ChevronLeft, ChevronRight } from "lucide-react";
-import type { DateRange, SalesPage } from "../types";
-import { errorMessage, getSales } from "../services/api";
+import type { DateRange, Sale, SalesPage } from "../types";
+import { deleteSale, errorMessage, getSales } from "../services/api";
 import { number, preciseMoney, shortDate } from "../utils/format";
 import { EmptyState, ErrorState } from "./States";
+import { SaleForm } from "./SaleForm";
 
 export function SalesTable({
   range,
   revision,
   compact = false,
   onViewAll,
+  onSalesChanged,
 }: {
   range: DateRange;
   revision: number;
   compact?: boolean;
   onViewAll?: () => void;
+  onSalesChanged: () => void;
 }) {
   const [offset, setOffset] = useState(0);
   const [data, setData] = useState<SalesPage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<Sale | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+  const deleting = useRef(false);
+
+  async function handleDelete(id: number) {
+    if (deleting.current) return;
+    if (
+      !window.confirm(
+        `Delete sale #${String(id).padStart(4, "0")}? This cannot be undone.`,
+      )
+    )
+      return;
+    deleting.current = true;
+    setDeletingId(id);
+    setDeleteError("");
+    try {
+      await deleteSale(id);
+    } catch (failure: unknown) {
+      setDeleteError(errorMessage(failure));
+      deleting.current = false;
+      setDeletingId(null);
+      return;
+    }
+    onSalesChanged();
+  }
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -42,12 +72,37 @@ export function SalesTable({
           <h2>{compact ? "Recent sales" : "Sales transactions"}</h2>
           <p>Your latest customer activity</p>
         </div>
-        {compact && (
-          <button className="text-button" onClick={onViewAll}>
-            View all sales <ArrowRight size={15} />
+        <div className="sales-actions">
+          <button
+            className="button"
+            disabled={deletingId !== null}
+            onClick={() => setAdding(true)}
+          >
+            Add Sale
           </button>
-        )}
+          {compact && (
+            <button className="text-button" onClick={onViewAll}>
+              View all sales <ArrowRight size={15} />
+            </button>
+          )}
+        </div>
       </div>
+      {(adding || editing) && (
+        <SaleForm
+          key={editing?.id ?? "new"}
+          sale={editing ?? undefined}
+          onClose={() => {
+            setAdding(false);
+            setEditing(null);
+          }}
+          onSaved={() => {
+            setAdding(false);
+            setEditing(null);
+            onSalesChanged();
+          }}
+        />
+      )}
+      {deleteError && <ErrorState message={deleteError} />}
       {error ? (
         <ErrorState
           message={error}
@@ -74,6 +129,7 @@ export function SalesTable({
                   <th>Date (UTC)</th>
                   <th>Qty</th>
                   <th className="text-right">Amount</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -102,6 +158,24 @@ export function SalesTable({
                     <td>{sale.quantity}</td>
                     <td className="amount">
                       {preciseMoney(sale.total_amount)}
+                    </td>
+                    <td>
+                      <button
+                        className="text-button"
+                        aria-label={`Edit sale #${String(sale.id).padStart(4, "0")}`}
+                        disabled={deletingId !== null}
+                        onClick={() => setEditing(sale)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className="text-button"
+                        aria-label={`Delete sale #${String(sale.id).padStart(4, "0")}`}
+                        disabled={deletingId !== null}
+                        onClick={() => handleDelete(sale.id)}
+                      >
+                        {deletingId === sale.id ? "Deleting…" : "Delete"}
+                      </button>
                     </td>
                   </tr>
                 ))}

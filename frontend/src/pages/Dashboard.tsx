@@ -14,14 +14,23 @@ export function Dashboard({
   revision,
   page,
   setPage,
+  onSalesChanged,
 }: {
   data: DashboardData;
   range: DateRange;
   revision: number;
   page: Page;
   setPage: (page: Page) => void;
+  onSalesChanged: () => void;
 }) {
-  if (page === "Sales") return <SalesTable range={range} revision={revision} />;
+  if (page === "Sales")
+    return (
+      <SalesTable
+        range={range}
+        revision={revision}
+        onSalesChanged={onSalesChanged}
+      />
+    );
   if (page === "AI Insights")
     return (
       <>
@@ -50,6 +59,7 @@ export function Dashboard({
             range={range}
             revision={revision}
             compact
+            onSalesChanged={onSalesChanged}
             onViewAll={() => setPage("Sales")}
           />
         </>
