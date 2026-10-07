@@ -71,6 +71,44 @@ render.yaml
 
 Commands below use **PowerShell** and start in the repository root. Do not overwrite existing `.env` files if already configured.
 
+## Run on this Windows workspace
+
+With Docker Desktop running and dependencies installed, run from the repository root:
+
+```powershell
+.\dev.cmd
+```
+
+Open **http://localhost:5173**. Keep the terminal open. Ctrl+C stops the API and UI;
+the Docker database keeps running and its data persists in a named volume. To stop
+the database separately, run `docker compose stop db`. After restarting Windows,
+start Docker Desktop and run the same command again.
+
+The launcher uses `backend/.env` regardless of the current directory and always
+starts/reuses this project's Docker Compose PostgreSQL. It never starts portable
+PostgreSQL or falls back to another server. It locates Docker Desktop's per-user or
+system installation even when the terminal PATH has not refreshed. It validates
+the Compose credentials, waits for a successful connection, and compares the
+PostgreSQL cluster identifier with the actual Compose container. Only then does
+it run the safe/idempotent seed, check the tables, start FastAPI, wait for API health,
+and start Vite. An occupied API/UI port or invalid local URL stops startup with a
+readable error. Backend changes require restarting this launcher; it runs FastAPI
+without reload.
+
+The launcher never resets passwords or an existing database. Its service logs are
+in `.local/*.stdout.log` and `.local/*.stderr.log`. A read-only database check is:
+
+```powershell
+.\dev.cmd --check
+```
+
+The workspace's portable PostgreSQL was migrated to Docker. The current volume is
+`sales_analytics_dashboard_sales_data_docker` for the default Compose project name.
+The original `.local/pgdata`, old Docker volume `sales_analytics_dashboard_sales_data`,
+and migration backup `.local/backups/portable-to-docker.dump` remain preserved.
+Do not run portable PostgreSQL on port 5432 while using Docker. Do not use
+`docker compose down -v` if you want to preserve the active database.
+
 ## 1. PostgreSQL setup
 
 ```powershell
@@ -85,6 +123,10 @@ docker compose ps
 ```
 
 PostgreSQL listens only on `127.0.0.1:5432`. Its data persists in a Docker named volume. To stop it without removing data: `docker compose stop db`.
+
+Compose uses `restart: unless-stopped`, so the database restarts when the Docker
+engine starts unless you explicitly stopped the container. Docker Desktop itself
+must also be running after a Windows restart.
 
 Without Docker, create a PostgreSQL database and role using your provider or PostgreSQL tools, then supply its connection string in the backend environment. SQLite is deliberately unsupported.
 
@@ -110,6 +152,14 @@ Percent-encode reserved characters in username/password. Provider URLs starting 
 
 Root `.env` is for Compose; backend reads **backend/.env** regardless of current directory. Environment variables override the file. Never commit secrets.
 
+The example files now use the same placeholder password. Replace it in both files
+before initializing a new database. Changing `.env` after PostgreSQL has already
+initialized its data directory/volume **does not change the stored role password**.
+For an existing database, use its actual credentials, or deliberately update the
+role password and then the connection settings. Never delete a volume/data directory
+to fix a credential mismatch. The local development launcher uses Docker exclusively;
+manual backend commands can still use an explicitly configured external PostgreSQL.
+
 ## 3. Initialize and seed
 
 ```powershell
@@ -131,7 +181,7 @@ From `backend/`:
 
 - API: http://localhost:8000
 - Interactive API docs: http://localhost:8000/docs
-- Health and database connection: http://localhost:8000/api/health
+- Health, database connection and required application tables: http://localhost:8000/api/health
 
 ## 5. Frontend installation and startup
 
@@ -237,7 +287,9 @@ See [Vite on Vercel](https://vercel.com/docs/frameworks/frontend/vite). Hosting 
 
 ## Troubleshooting
 
-- **Database unavailable:** check Docker, matching database credentials, and run the seed command.
+- **Database connection unavailable:** start PostgreSQL first, preferably with `.\dev.cmd`. Starting FastAPI and Vite alone does not start the database.
+- **Database authentication failed:** `backend/.env` must match the password stored in PostgreSQL. Editing root `.env` or an example file cannot update an existing role password.
+- **Database schema is not initialized:** connect to the intended database and run `python -m app.seed` from `backend/`. Health now detects missing application tables, even when `SELECT 1` would succeed.
 - **Cannot reach server:** start FastAPI; verify `VITE_API_URL` and exact CORS origin. On Windows, use the documented localhost browser URL.
 - **Empty dashboard:** choose the wider period, or seed an empty database. Old seeded dates do not automatically move forward.
 - **AI not configured:** set the key on the backend only and restart it.

@@ -404,3 +404,40 @@ def test_database_failure_is_sanitized(client):
     response = client.get("/api/health")
     assert response.status_code == 503
     assert "secret" not in response.text
+
+
+def test_health_checks_application_schema(client):
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json()["database"] == "connected"
+
+
+@pytest.mark.parametrize("table", ["customers", "products", "sales"])
+def test_health_rejects_missing_application_tables(client, table):
+    db = app.dependency_overrides[get_db]()
+    # The fixture's search_path points only to its isolated, rolled-back test schema.
+    db.execute(text(f'DROP TABLE "{table}" CASCADE'))
+    response = client.get("/api/health")
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Database schema is not initialized. Run python -m app.seed."
+
+
+@pytest.mark.parametrize("sqlstate,expected", [
+    ("28P01", "Database authentication failed."),
+    ("3D000", "Configured database does not exist."),
+    ("42P01", "Database schema is not initialized."),
+    (None, "Database connection unavailable."),
+])
+def test_database_errors_are_actionable_without_leaking_secrets(client, sqlstate, expected):
+    from sqlalchemy.exc import OperationalError
+
+    def unavailable():
+        error = Exception("private credentials")
+        error.sqlstate = sqlstate
+        raise OperationalError("private SQL", {}, error)
+
+    app.dependency_overrides[get_db] = unavailable
+    response = client.get("/api/health")
+    assert response.status_code == 503
+    assert response.json()["detail"].startswith(expected)
+    assert "private" not in response.text

@@ -1,4 +1,55 @@
-# Verification — 2026-10-05
+# Verification
+
+## Docker database migration — 2026-10-07
+
+- Docker Desktop is running using the `desktop-linux` context. The launcher now
+  uses Docker Compose exclusively and finds per-user/system Docker installations
+  even when the terminal PATH has not refreshed. No portable PostgreSQL fallback.
+- Backed up the latest portable database to `.local/backups/portable-to-docker.dump`
+  and restored it transactionally into a fresh Compose volume. Preserved the
+  portable data directory and previous Docker volume.
+- Active container: `sales_analytics_dashboard-db-1`, PostgreSQL 17, healthy,
+  `127.0.0.1:5432`, restart policy `unless-stopped`.
+- Active volume: `sales_analytics_dashboard_sales_data_docker`. Previous volume
+  `sales_analytics_dashboard_sales_data` remains intact.
+- Verified every source/target row using ordered row-content digests in UTC and
+  preserved all sequence values. Latest source counts: **100 customers / 30 products
+  / 1,499 sales**; this reflects the current data, without reseeding deleted sales.
+- Launcher compares the PostgreSQL cluster identifier reached by `DATABASE_URL`
+  against the Compose container, preventing connection to another local server.
+- PostgreSQL tests against Docker: **66 passed**. Backend and launcher Ruff passed.
+  Frontend code/dependencies were unchanged; its existing production build was
+  already verified during startup recovery.
+- Live API health, all seven data endpoints, frontend HTTP, and allowed-origin CORS
+  passed. Restarted only the Docker database while API/UI were running; the API
+  recovered, exact row contents and sequences persisted, and UI remained available.
+- `dev.cmd --check` confirms Docker identity, database connectivity and schema.
+  Ctrl+C stops API/UI; Compose keeps PostgreSQL running. Docker Desktop must be
+  running after a Windows restart. No OS reboot was performed in this verification.
+
+## Windows startup recovery — 2026-10-07
+
+- Reproduced frontend HTTP 200 with API health/dashboard 503 while PostgreSQL was
+  not listening. Portable PostgreSQL also failed with missing Visual C++ runtime
+  DLLs; after repairing these, the configured database password was rejected.
+- Repaired the local runtime using Microsoft-signed DLLs, recovered only the local
+  role password, and synchronized ignored root/backend environment files. Kept the
+  existing data directory, SCRAM authentication and all application records.
+- Added `dev.cmd` / `scripts/dev.py`: database readiness, idempotent seed, API health,
+  then UI startup; safe process ownership and orderly local database shutdown.
+- Health now checks all three required tables. Database failures return specific,
+  sanitized messages for authentication, missing database/schema and connectivity.
+- PostgreSQL integration tests: **62 passed**. Backend/launcher Ruff, `pip check`
+  and TypeScript/Vite production build passed.
+- All eight read API routes and allowed-origin CORS verified against live services.
+- Stopped all three services, verified their ports closed, and restarted successfully
+  from `frontend/`. Database counts stayed **100 customers / 30 products / 1,500 sales**.
+- Offline `dev.cmd --check` failed clearly; online check passed. No actual OS reboot
+  was performed. No browser was available for visual verification; AI was mocked,
+  with the live missing-key path verified separately.
+- Full Persian diagnosis and run instructions: [DIAGNOSIS.fa.md](DIAGNOSIS.fa.md).
+
+## Previous verification — 2026-10-05
 
 ## Edit Sale feature
 

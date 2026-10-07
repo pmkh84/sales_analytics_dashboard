@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=Path(__file__).resolve().parents[1] / ".env", extra="ignore")
     database_url: str
     frontend_url: str = "http://localhost:5173"
-    openai_api_key: str = "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"
+    openai_api_key: str = ""
     openai_model: str = "gpt-5.6-luna"
 
     @field_validator("database_url")
