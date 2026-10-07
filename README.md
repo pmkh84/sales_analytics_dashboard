@@ -153,12 +153,8 @@ Percent-encode reserved characters in username/password. Provider URLs starting 
 Root `.env` is for Compose; backend reads **backend/.env** regardless of current directory. Environment variables override the file. Never commit secrets.
 
 Optional Telegram sale notifications use backend-only `TELEGRAM_BOT_TOKEN`.
-Any chat can subscribe with `/start` and unsubscribe with `/stop`; active
-subscribers are stored in PostgreSQL. `TELEGRAM_CHAT_ID` is no longer used.
-Missing bot credentials disable delivery with a startup warning;
-`TELEGRAM_ENABLED=false` explicitly disables it. The API URL and timeout are also
-configurable. See [Telegram integration](backend/TELEGRAM.md) for the event flows,
-configuration, webhook setup, tests and delivery limitations.
+Follow [Telegram Notifications Setup](#telegram-notifications-setup) below for bot
+configuration, local ngrok development and automatic subscriptions.
 
 The example files now use the same placeholder password. Replace it in both files
 before initializing a new database. Changing `.env` after PostgreSQL has already
@@ -175,7 +171,7 @@ cd backend
 ..\.venv\Scripts\python.exe -m app.seed
 ```
 
-This creates the three tables, their relationships, constraints and indexes. It inserts deterministic demo entities with timestamps relative to the current date. Re-running against a database containing any customers/products/sales safely skips insertion; it never truncates existing data. Demo customer addresses use `example.com`.
+This creates the customer, product, sale and Telegram subscriber tables, their relationships, constraints and indexes. It inserts deterministic demo entities with timestamps relative to the current date. Re-running against a database containing any customers/products/sales safely skips insertion; it never truncates existing data. Demo customer addresses use `example.com`.
 
 The schema is initialized explicitly rather than during every request. This small project uses SQLAlchemy `create_all`; schema changes to an existing database need a deliberate migration. Rerunning the seed does not refresh timestamps in an old dataset.
 
@@ -208,6 +204,209 @@ Open **http://localhost:5173** (use this exact origin to match CORS).
 The dev server uses port 5173 strictly. If that port is occupied, stop the existing process or intentionally update the port and `FRONTEND_URL` together.
 
 For macOS/Linux, use `python3 -m venv .venv`, `.venv/bin/python` (or `../.venv/bin/python` from backend), `cp` instead of `Copy-Item`, and `npm` instead of `npm.cmd`.
+
+## Telegram Notifications Setup
+
+Sale notifications are sent to active subscribers stored in PostgreSQL. Any
+Telegram user can subscribe with `/start`; no invitation code, authentication or
+approval is required. This project receives commands through a webhook.
+
+### 1. Prerequisites and backend settings
+
+- Create a Telegram bot through [BotFather](https://t.me/BotFather) and obtain its bot token.
+- Complete backend installation and configure `DATABASE_URL` in `backend/.env`.
+- Keep PostgreSQL running and initialize the schema as shown below.
+- Install [ngrok](https://ngrok.com/docs/getting-started/) and complete its account/agent setup for local development.
+
+Add these settings to **backend/.env**, replacing only the token placeholder:
+
+```dotenv
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_API_URL=https://api.telegram.org
+TELEGRAM_TIMEOUT_SECONDS=3
+```
+
+The API URL and timeout shown are the existing defaults. The timeout applies per
+HTTP phase and must be greater than zero and at most 30 seconds. A blank bot token
+disables delivery with a startup warning; `TELEGRAM_ENABLED=false` also disables
+delivery. Restart the backend after changing settings. `TELEGRAM_CHAT_ID` is no
+longer used; recipients come from subscriber records.
+
+### 2. Start the backend
+
+In a PowerShell terminal, from the repository root:
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe -m app.seed
+..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+The seed command creates the subscriber table and preserves existing business
+records. The backend runs at **http://127.0.0.1:8000**; check `/api/health` and keep
+the terminal open. If `.\dev.cmd` is already running the backend, use that instance
+instead of starting a second server on port 8000.
+
+### 3. Start ngrok and build the webhook URL
+
+Telegram cannot access localhost directly. Open a second terminal and expose
+the local backend through a public HTTPS tunnel:
+
+```powershell
+ngrok http 8000
+```
+
+Copy the HTTPS **Forwarding** URL printed by ngrok. For example, if it is
+`https://example.ngrok-free.dev`, the full webhook URL is:
+
+```text
+https://example.ngrok-free.dev/api/telegram/webhook
+```
+
+The domain above is illustrative; use your actual ngrok URL. Keep ngrok running.
+Opening its root URL may show `GET / 404 Not Found` because this backend has no
+`/` route. That is normal. The Telegram endpoint is **POST `/api/telegram/webhook`**;
+opening that endpoint in a browser sends GET and may return 405.
+
+Keep the FastAPI router prefix unchanged:
+
+```python
+APIRouter(prefix="/api/telegram", tags=["Telegram"])
+```
+
+Do not put the ngrok domain inside `APIRouter(prefix=...)`. The public URL is used
+only when registering the webhook; the backend route remains `/api/telegram`.
+
+### 4. Register the webhook
+
+In a third terminal, from the repository root:
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe -m app.notifications.webhook https://example.ngrok-free.dev/api/telegram/webhook
+```
+
+Replace the example domain with the current HTTPS Forwarding URL. This existing
+module reads the token from backend settings and calls Telegram's
+[`setWebhook` API](https://core.telegram.org/bots/api#setwebhook), telling Telegram
+where to POST bot updates. A successful command prints:
+
+```text
+Telegram webhook registered. Send /start to the bot to subscribe.
+```
+
+### 5. Verify webhook registration
+
+Telegram's [`getWebhookInfo` API](https://core.telegram.org/bots/api#getwebhookinfo)
+uses this URL format, shown with a placeholder only:
+
+```text
+https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getWebhookInfo
+```
+
+To check it without typing a real token into shell commands or browser history,
+run the following from `backend/`. It reads the existing backend settings and
+prints the response; connection errors are reported without printing the token:
+
+```powershell
+@'
+import json
+from urllib.error import URLError
+from urllib.request import urlopen
+from app.config import get_settings
+
+settings = get_settings()
+token = settings.telegram_bot_token.get_secret_value().strip()
+if not token:
+    raise SystemExit("Configure TELEGRAM_BOT_TOKEN in backend/.env first.")
+url = f"{settings.telegram_api_url}/bot{token}/getWebhookInfo"
+try:
+    with urlopen(url, timeout=settings.telegram_timeout_seconds) as response:
+        print(json.dumps(json.load(response), indent=2))
+except (URLError, TimeoutError, ValueError):
+    raise SystemExit("Could not read webhook status; check backend settings and connectivity.") from None
+'@ | ..\.venv\Scripts\python.exe -
+```
+
+Look for `"ok": true` and a non-empty `result.url` matching the current full
+ngrok webhook URL. `result.pending_update_count` is the number of Telegram
+updates waiting to be delivered. If it keeps increasing, inspect
+`result.last_error_message` and the backend/ngrok logs.
+
+### 6. Subscribe and test a sale
+
+Send `/start` to your bot in Telegram. The expected response is:
+
+```text
+Subscribed! You will receive sale notifications. Send /stop to unsubscribe.
+```
+
+Receiving this confirmation shows that Telegram reached the webhook, the backend
+processed the update, your chat ID was stored or activated in PostgreSQL, and the
+backend successfully sent a Telegram reply. A repeated `/start` refreshes
+available metadata and reactivates an inactive subscriber.
+
+Create, edit or delete a sale through the dashboard or API to test notifications.
+Sale events are published after successful commits (and refreshes for create/edit).
+Send `/stop` to deactivate your subscription; the reply is:
+
+```text
+Unsubscribed. Send /start to subscribe again.
+```
+
+The subscription and notification flow is:
+
+```text
+/start -> Telegram webhook -> handle_update()
+       -> TelegramSubscriber stored with is_active=true -> commit -> confirmation
+
+Successful sale commit -> business event -> NotificationHandler
+                      -> active_chat_ids() -> TelegramClient.send_message()
+```
+
+Notification recipients are queried from the database for each event, rather than
+using a hardcoded chat ID. `/stop` sets `is_active=false`, excluding that chat from
+future broadcasts. Telegram delivery failures are logged and do not undo a
+successful sale or subscription change. See [the integration guide](backend/TELEGRAM.md)
+for the detailed architecture and delivery limitations.
+
+### When the ngrok URL changes
+
+Always check the actual Forwarding URL after restarting ngrok. Local tunnel URLs
+may change depending on the domain configuration. The
+[current ngrok free plan](https://ngrok.com/docs/pricing-limits/free-plan-limits#domains)
+provides an assigned development domain that can remain stable across sessions;
+a restart alone does not necessarily change the URL.
+
+Whenever the public URL changes, keep the FastAPI route unchanged, append
+`/api/telegram/webhook` to the new HTTPS URL, and rerun the registration command
+with that full URL. Verify it with `getWebhookInfo`. For a stable public URL,
+`setWebhook` normally only needs to run once, unless the webhook was removed or
+changed. The backend and tunnel still need to remain running to receive updates.
+
+### Telegram troubleshooting
+
+| Symptom | Checks / resolution |
+| --- | --- |
+| `/start` gives no response | Check that the backend and ngrok are running, the bot token is configured, `TELEGRAM_ENABLED=true`, and `getWebhookInfo` shows the current non-empty URL ending in `/api/telegram/webhook`. Check backend logs for database or delivery errors. |
+| `getWebhookInfo` shows `"url": ""` | No webhook is registered. Run the project's registration command with the full public HTTPS webhook URL. |
+| ngrok shows `GET / 404 Not Found` | Normal for this backend, which has no root route. Telegram sends POST requests to `/api/telegram/webhook`. |
+| FastAPI reports `A path prefix must start with '/'` | The router prefix must be `/api/telegram`. Remove any ngrok domain from the prefix and use the domain only in webhook registration. |
+| `/start` works but sale notifications do not arrive | Check `TELEGRAM_ENABLED=true`, an active record in `telegram_subscribers`, successful business commit/event publication, and notification delivery logs. Perform actions through the sale API; direct database writes and demo seeding do not publish sale events. |
+
+With the launcher, logs are in `.local/backend.stderr.log`; with direct Uvicorn,
+check its terminal output. After a public URL change, re-register the webhook
+before retrying `/start`.
+
+### Token handling
+
+Never commit `TELEGRAM_BOT_TOKEN`, expose it in frontend code or `VITE_*` variables,
+or paste its real value into shell commands. Use `backend/.env` or backend process
+settings; keep `.env.example` and README examples limited to placeholders.
+The registration and verification commands above read the token from settings.
+This token is the backend's Telegram API credential, not a subscription password;
+users still subscribe automatically without authentication or approval.
 
 ## Verification
 
