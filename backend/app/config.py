@@ -1,17 +1,36 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=Path(__file__).resolve().parents[1] / ".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=Path(__file__).resolve().parents[1] / ".env", extra="ignore", hide_input_in_errors=True,
+    )
     database_url: str
     frontend_url: str = "http://localhost:5173"
     openai_api_key: str = ""
     openai_model: str = "gpt-5.6-luna"
+    telegram_bot_token: SecretStr = Field(default=SecretStr(""), repr=False)
+    telegram_enabled: bool = True
+    telegram_api_url: str = "https://api.telegram.org"
+    telegram_timeout_seconds: float = Field(default=3.0, gt=0, le=30, allow_inf_nan=False)
+
+    @field_validator("telegram_api_url")
+    @classmethod
+    def valid_telegram_api_url(cls, value: str) -> str:
+        from urllib.parse import urlsplit
+
+        url = urlsplit(value)
+        if (
+            url.scheme != "https" or not url.netloc or url.username is not None
+            or url.password is not None or url.query or url.fragment
+        ):
+            raise ValueError("TELEGRAM_API_URL must be an HTTPS URL without credentials, query or fragment.")
+        return value.rstrip("/")
 
     @field_validator("database_url")
     @classmethod

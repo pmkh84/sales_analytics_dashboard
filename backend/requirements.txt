@@ -4,4 +4,5 @@ SQLAlchemy==2.0.54
 psycopg[binary]==3.3.6
 pydantic-settings==2.15.0
 openai==2.54.0
+httpx==0.28.1
 

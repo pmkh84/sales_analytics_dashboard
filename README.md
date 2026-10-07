@@ -152,6 +152,14 @@ Percent-encode reserved characters in username/password. Provider URLs starting 
 
 Root `.env` is for Compose; backend reads **backend/.env** regardless of current directory. Environment variables override the file. Never commit secrets.
 
+Optional Telegram sale notifications use backend-only `TELEGRAM_BOT_TOKEN`.
+Any chat can subscribe with `/start` and unsubscribe with `/stop`; active
+subscribers are stored in PostgreSQL. `TELEGRAM_CHAT_ID` is no longer used.
+Missing bot credentials disable delivery with a startup warning;
+`TELEGRAM_ENABLED=false` explicitly disables it. The API URL and timeout are also
+configurable. See [Telegram integration](backend/TELEGRAM.md) for the event flows,
+configuration, webhook setup, tests and delivery limitations.
+
 The example files now use the same placeholder password. Replace it in both files
 before initializing a new database. Changing `.env` after PostgreSQL has already
 initialized its data directory/volume **does not change the stored role password**.

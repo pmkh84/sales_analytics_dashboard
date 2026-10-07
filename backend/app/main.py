@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -9,10 +10,18 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import get_db
-from app.routers import ai, dashboard, sales
+from app.notifications.service import get_notification_handler
+from app.routers import ai, dashboard, sales, telegram
 from app.schemas import Health
 
-app = FastAPI(title="AI Sales Analytics API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    get_notification_handler()
+    yield
+
+
+app = FastAPI(title="AI Sales Analytics API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[get_settings().frontend_url],
@@ -23,6 +32,7 @@ app.add_middleware(
 app.include_router(dashboard.router)
 app.include_router(ai.router)
 app.include_router(sales.router)
+app.include_router(telegram.router)
 
 
 @app.exception_handler(SQLAlchemyError)

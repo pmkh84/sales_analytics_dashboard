@@ -1,11 +1,13 @@
 """Integration tests against PostgreSQL, isolated in a rolled-back temporary schema."""
 
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -14,8 +16,28 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import Base, engine, get_db
+from app.events import SaleCreated, SaleDeleted, SaleUpdated
 from app.main import app
-from app.models import Customer, Product, Sale
+from app.models import Customer, Product, Sale, TelegramSubscriber
+from app.notifications import service as notifications
+from app.notifications import subscriptions
+from app.notifications.service import NotificationHandler
+from app.notifications.telegram import TelegramClient
+
+SALE_PAYLOAD = {"customer_id": 1, "product_id": 1, "quantity": 2}
+SALE_ACTIONS = [
+    ("post", "/api/sales", 201, SaleCreated),
+    ("patch", "/api/sales/3", 200, SaleUpdated),
+    ("delete", "/api/sales/3", 204, SaleDeleted),
+]
+
+
+@pytest.fixture(autouse=True)
+def notification_handler(monkeypatch):
+    # Never deliver to real Telegram, even if the developer has configured credentials.
+    handler = Mock()
+    monkeypatch.setattr(notifications, "get_notification_handler", lambda: handler)
+    return handler
 
 
 @pytest.fixture
@@ -441,3 +463,377 @@ def test_database_errors_are_actionable_without_leaking_secrets(client, sqlstate
     assert response.status_code == 503
     assert response.json()["detail"].startswith(expected)
     assert "private" not in response.text
+
+
+def _sale_action(client, method, path):
+    kwargs = {} if method == "delete" else {"json": SALE_PAYLOAD}
+    return getattr(client, method)(path, **kwargs)
+
+
+@pytest.mark.parametrize("method,path,status,event_type", SALE_ACTIONS)
+def test_notification_follows_commit_and_has_database_snapshot(
+    client, notification_handler, method, path, status, event_type,
+):
+    db = app.dependency_overrides[get_db]()
+    original_commit, original_refresh = db.commit, db.refresh
+    order = []
+
+    def commit():
+        original_commit()
+        order.append("committed")
+
+    def refresh(*args, **kwargs):
+        original_refresh(*args, **kwargs)
+        order.append("refreshed")
+
+    def notified(event):
+        assert order == (["committed"] if method == "delete" else ["committed", "refreshed"])
+        assert isinstance(event, event_type)
+        snapshot = event.sale
+        stored = db.get(Sale, snapshot.id)
+        if method == "delete":
+            assert stored is None
+            assert snapshot.quantity == 3
+            assert snapshot.total_amount == Decimal("150")
+        else:
+            assert stored.quantity == snapshot.quantity == 2
+            assert stored.total_amount == snapshot.total_amount == Decimal("100")
+        assert snapshot.product_name == "Test Product"
+        assert snapshot.category == "Electronics"
+        assert snapshot.customer_id == snapshot.product_id == 1
+        if method == "patch":
+            assert event.previous.quantity == 3
+            assert event.previous.total_amount == Decimal("150")
+        order.append("notified")
+
+    notification_handler.handle.side_effect = notified
+    with patch.object(db, "commit", side_effect=commit), patch.object(db, "refresh", side_effect=refresh):
+        assert _sale_action(client, method, path).status_code == status
+    notification_handler.handle.assert_called_once()
+    assert order[-1] == "notified"
+
+
+@pytest.mark.parametrize("method,path,status,event_type", SALE_ACTIONS)
+def test_commit_failure_rolls_back_without_notification(
+    client, notification_handler, method, path, status, event_type,
+):
+    db = app.dependency_overrides[get_db]()
+    original_count = db.scalar(text("SELECT count(*) FROM sales"))
+    with patch.object(db, "commit", side_effect=SQLAlchemyError("private failure")):
+        response = _sale_action(client, method, path)
+    assert response.status_code == 503
+    notification_handler.handle.assert_not_called()
+    assert db.scalar(text("SELECT count(*) FROM sales")) == original_count
+    assert db.get(Sale, 3).quantity == 3
+    assert db.get(Sale, 3).total_amount == Decimal("150")
+
+
+def test_create_flush_failure_does_not_notify(client, notification_handler):
+    db = app.dependency_overrides[get_db]()
+    with patch.object(db, "flush", side_effect=SQLAlchemyError("test failure")):
+        assert _sale_action(client, "post", "/api/sales").status_code == 503
+    notification_handler.handle.assert_not_called()
+    assert db.scalar(text("SELECT count(*) FROM sales")) == 4
+
+
+@pytest.mark.parametrize("method,path,status,event_type", SALE_ACTIONS[:2])
+def test_refresh_failure_does_not_notify(client, notification_handler, method, path, status, event_type):
+    db = app.dependency_overrides[get_db]()
+    with patch.object(db, "refresh", side_effect=SQLAlchemyError("test failure")):
+        assert _sale_action(client, method, path).status_code == 503
+    notification_handler.handle.assert_not_called()
+
+
+@pytest.mark.parametrize("method,path,payload,status", [
+    ("post", "/api/sales", {**SALE_PAYLOAD, "customer_id": 999}, 404),
+    ("patch", "/api/sales/3", {**SALE_PAYLOAD, "product_id": 999}, 404),
+    ("patch", "/api/sales/999", SALE_PAYLOAD, 404),
+    ("delete", "/api/sales/999", None, 404),
+    ("post", "/api/sales", {**SALE_PAYLOAD, "quantity": 0}, 422),
+    ("patch", "/api/sales/3", {**SALE_PAYLOAD, "quantity": 0}, 422),
+    ("delete", "/api/sales/0", None, 422),
+])
+def test_business_validation_failure_does_not_notify(client, notification_handler, method, path, payload, status):
+    kwargs = {} if payload is None else {"json": payload}
+    assert getattr(client, method)(path, **kwargs).status_code == status
+    notification_handler.handle.assert_not_called()
+
+
+@pytest.mark.parametrize("method,path,status,event_type", SALE_ACTIONS)
+@pytest.mark.parametrize("failure", ["http", "timeout", "api", "invalid_json", "unexpected"])
+def test_telegram_failure_preserves_api_success_and_data(
+    client, monkeypatch, caplog, method, path, status, event_type, failure,
+):
+    original_client = httpx.Client
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if failure == "timeout":
+            raise httpx.ReadTimeout("private credentials", request=request)
+        if failure == "unexpected":
+            raise RuntimeError("private credentials")
+        if failure == "invalid_json":
+            return httpx.Response(200, text="private response")
+        return httpx.Response(500 if failure == "http" else 200,
+                              json={"ok": False, "description": "private response"})
+
+    monkeypatch.setattr("app.notifications.telegram.httpx.Client", lambda **kwargs: original_client(
+        **kwargs, transport=httpx.MockTransport(respond), trust_env=False,
+    ))
+    handler = NotificationHandler(TelegramClient(
+        "synthetic-marker", "https://example.invalid", 1,
+    ), lambda: [7])
+    monkeypatch.setattr(notifications, "get_notification_handler", lambda: handler)
+    response = _sale_action(client, method, path)
+    assert response.status_code == status
+    assert len(requests) == 1
+    assert "private" not in caplog.text
+    assert "synthetic-marker" not in caplog.text
+    assert f"event={event_type.__name__}" in caplog.text
+    assert "sale_id=" in caplog.text
+    assert "synthetic" not in response.text
+    db = app.dependency_overrides[get_db]()
+    db.expire_all()
+    if method == "delete":
+        assert db.get(Sale, 3) is None
+    else:
+        stored = db.get(Sale, response.json()["id"])
+        assert stored.quantity == 2
+        assert stored.total_amount == Decimal("100")
+
+
+@pytest.mark.parametrize("method,path,status,event_type", SALE_ACTIONS)
+def test_missing_notification_config_preserves_api_success(client, monkeypatch, method, path, status, event_type):
+    monkeypatch.setattr(notifications, "get_notification_handler", lambda: None)
+    assert _sale_action(client, method, path).status_code == status
+
+
+@pytest.mark.parametrize("method,path,status,event_type", SALE_ACTIONS)
+def test_successful_api_operation_delivers_expected_message(client, monkeypatch, method, path, status, event_type):
+    original_client = httpx.Client
+    messages = []
+
+    def respond(request):
+        import json
+
+        messages.append(json.loads(request.content)["text"])
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+    monkeypatch.setattr("app.notifications.telegram.httpx.Client", lambda **kwargs: original_client(
+        **kwargs, transport=httpx.MockTransport(respond), trust_env=False,
+    ))
+    handler = NotificationHandler(TelegramClient(
+        "synthetic-marker", "https://example.invalid", 1,
+    ), lambda: [7])
+    monkeypatch.setattr(notifications, "get_notification_handler", lambda: handler)
+    assert _sale_action(client, method, path).status_code == status
+    assert len(messages) == 1
+    message = messages[0]
+    if method == "post":
+        assert "Sale Created (Sold)" in message
+        assert "Quantity: 2" in message
+        assert "Total (USD): 100.00" in message
+    elif method == "patch":
+        assert "Sale Updated" in message
+        assert "Quantity: 3 \u2192 2" in message
+        assert "Total (USD): 150.00 \u2192 100.00" in message
+    else:
+        assert "Sale Deleted" in message
+        assert "Product: Test Product (#1)" in message
+        assert "Quantity: 3" in message
+    assert "Test Buyer" not in message
+    assert "test@example.com" not in message
+
+
+def _telegram_command(client, command, chat_id=9000000001, **metadata):
+    return client.post("/api/telegram/webhook", json={
+        "update_id": 1,
+        "message": {"chat": {"id": chat_id, "type": "private", **metadata}, "text": command},
+    })
+
+
+@pytest.mark.parametrize("chat_id", [123, 9000000001, -1009000000001])
+def test_start_accepts_any_chat_without_authorization(client, notification_handler, chat_id):
+    response = _telegram_command(client, "/start", chat_id, username="demo", first_name="Demo", last_name="User")
+    assert response.status_code == 200 and response.json() == {"ok": True}
+    db = app.dependency_overrides[get_db]()
+    subscriber = db.get(TelegramSubscriber, chat_id)
+    assert subscriber.is_active
+    assert (subscriber.username, subscriber.first_name, subscriber.last_name) == ("demo", "Demo", "User")
+    assert subscriber.chat_type == "private"
+    notification_handler.confirm_subscription.assert_called_once_with(chat_id, True)
+
+
+@pytest.mark.parametrize("command", ["/start", "/start@DemoBot", "/start ignored-argument"])
+def test_start_upserts_refreshes_metadata_and_preserves_missing_metadata(client, notification_handler, command):
+    db = app.dependency_overrides[get_db]()
+    assert _telegram_command(client, "/start", username="old", first_name="Original").status_code == 200
+    created = db.get(TelegramSubscriber, 9000000001).created_at
+    assert _telegram_command(client, command, username="new").status_code == 200
+    db.expire_all()
+    subscriber = db.get(TelegramSubscriber, 9000000001)
+    assert subscriber.username == "new" and subscriber.first_name == "Original"
+    assert subscriber.created_at == created
+    assert subscriber.updated_at >= created
+    assert db.scalar(text("SELECT count(*) FROM telegram_subscribers")) == 1
+    assert notification_handler.confirm_subscription.call_count == 2
+
+
+def test_stop_then_start_reactivates_same_subscriber(client, notification_handler):
+    db = app.dependency_overrides[get_db]()
+    assert _telegram_command(client, "/start").status_code == 200
+    assert _telegram_command(client, "/stop").status_code == 200
+    db.expire_all()
+    assert not db.get(TelegramSubscriber, 9000000001).is_active
+    notification_handler.confirm_subscription.assert_called_with(9000000001, False)
+    assert _telegram_command(client, "/start", first_name="Updated").status_code == 200
+    db.expire_all()
+    assert db.get(TelegramSubscriber, 9000000001).is_active
+    assert db.get(TelegramSubscriber, 9000000001).first_name == "Updated"
+    assert db.scalar(text("SELECT count(*) FROM telegram_subscribers")) == 1
+    notification_handler.confirm_subscription.assert_called_with(9000000001, True)
+
+
+def test_stop_unknown_chat_confirms_without_creating_subscription(client, notification_handler):
+    assert _telegram_command(client, "/stop").status_code == 200
+    db = app.dependency_overrides[get_db]()
+    assert db.get(TelegramSubscriber, 9000000001) is None
+    notification_handler.confirm_subscription.assert_called_once_with(9000000001, False)
+
+
+@pytest.mark.parametrize("payload", [
+    {"update_id": 1, "callback_query": {"data": "anything"}},
+    {"update_id": 1},
+    {"update_id": 1, "message": {"chat": {"id": 123, "type": "private"}, "photo": []}},
+    {"update_id": 1, "message": {"chat": {"id": 123, "type": "private"}, "text": "   "}},
+    {"update_id": 1, "message": {"chat": {"id": 123, "type": "private"}, "text": "/help"}},
+    {"update_id": 1, "message": {"chat": {"id": 123, "type": "private"}, "text": "say /start"}},
+])
+def test_other_telegram_updates_are_ignored(client, notification_handler, payload):
+    assert client.post("/api/telegram/webhook", json=payload).status_code == 200
+    notification_handler.confirm_subscription.assert_not_called()
+    db = app.dependency_overrides[get_db]()
+    assert subscriptions.active_chat_ids(db) == []
+
+
+@pytest.mark.parametrize("command,active", [("/start", True), ("/stop", False)])
+def test_subscription_confirmation_is_after_commit(client, notification_handler, command, active):
+    db = app.dependency_overrides[get_db]()
+    _telegram_command(client, "/start")
+    notification_handler.reset_mock()
+    original_commit = db.commit
+    committed = False
+
+    def commit():
+        nonlocal committed
+        original_commit()
+        committed = True
+
+    def confirmed(chat_id, is_active):
+        assert committed
+        assert db.get(TelegramSubscriber, chat_id).is_active == is_active == active
+
+    notification_handler.confirm_subscription.side_effect = confirmed
+    with patch.object(db, "commit", side_effect=commit):
+        assert _telegram_command(client, command).status_code == 200
+    notification_handler.confirm_subscription.assert_called_once_with(9000000001, active)
+
+
+@pytest.mark.parametrize("command", ["/start", "/stop"])
+def test_subscription_commit_failure_rolls_back_and_skips_confirmation(client, notification_handler, command):
+    db = app.dependency_overrides[get_db]()
+    if command == "/stop":
+        _telegram_command(client, "/start")
+        notification_handler.reset_mock()
+    with patch.object(db, "commit", side_effect=SQLAlchemyError("private failure")):
+        assert _telegram_command(client, command).status_code == 503
+    notification_handler.confirm_subscription.assert_not_called()
+    db.expire_all()
+    subscriber = db.get(TelegramSubscriber, 9000000001)
+    assert subscriber is None if command == "/start" else subscriber.is_active
+
+
+@pytest.mark.parametrize("command", ["/start", "/stop"])
+@pytest.mark.parametrize("failure", ["http", "unexpected"])
+def test_confirmation_failure_preserves_subscription_state(client, monkeypatch, caplog, command, failure):
+    db = app.dependency_overrides[get_db]()
+    if command == "/stop":
+        _telegram_command(client, "/start")
+    original_client = httpx.Client
+
+    def respond(request):
+        if failure == "unexpected":
+            raise RuntimeError("private failure")
+        return httpx.Response(500, json={"ok": False})
+
+    monkeypatch.setattr("app.notifications.telegram.httpx.Client", lambda **kwargs: original_client(
+        **kwargs, transport=httpx.MockTransport(respond), trust_env=False,
+    ))
+    handler = NotificationHandler(TelegramClient("synthetic-marker", "https://example.invalid", 1))
+    monkeypatch.setattr(notifications, "get_notification_handler", lambda: handler)
+    assert _telegram_command(client, command).status_code == 200
+    db.expire_all()
+    assert db.get(TelegramSubscriber, 9000000001).is_active == (command == "/start")
+    assert "Telegram delivery failed" in caplog.text
+    assert "private failure" not in caplog.text and "synthetic-marker" not in caplog.text
+
+
+def test_subscription_persists_when_telegram_is_disabled(client, monkeypatch):
+    monkeypatch.setattr(notifications, "get_notification_handler", lambda: None)
+    assert _telegram_command(client, "/start").status_code == 200
+    db = app.dependency_overrides[get_db]()
+    assert db.get(TelegramSubscriber, 9000000001).is_active
+
+
+@pytest.mark.parametrize("method,path,status,event_type", SALE_ACTIONS)
+def test_sales_broadcast_to_active_subscribers_only(client, monkeypatch, method, path, status, event_type):
+    db = app.dependency_overrides[get_db]()
+    _telegram_command(client, "/start", 11)
+    _telegram_command(client, "/start", 22)
+    _telegram_command(client, "/start", 33)
+    _telegram_command(client, "/stop", 22)
+    transport = Mock()
+    handler = NotificationHandler(transport, lambda: subscriptions.active_chat_ids(db))
+    monkeypatch.setattr(notifications, "get_notification_handler", lambda: handler)
+    assert _sale_action(client, method, path).status_code == status
+    assert [entry.args[1] for entry in transport.send_message.call_args_list] == [11, 33]
+    assert transport.send_message.call_args_list[0].args[0] == transport.send_message.call_args_list[1].args[0]
+
+
+def test_group_chat_metadata_is_supported(client):
+    assert _telegram_command(client, "/start", -1009000000001, type="supergroup", title="Demo Group").status_code == 200
+    db = app.dependency_overrides[get_db]()
+    subscriber = db.get(TelegramSubscriber, -1009000000001)
+    assert subscriber.chat_type == "supergroup" and subscriber.title == "Demo Group"
+
+
+def test_default_broadcast_queries_current_subscriptions_each_time(client, monkeypatch):
+    db = app.dependency_overrides[get_db]()
+    _telegram_command(client, "/start", 11)
+    monkeypatch.setattr(subscriptions, "SessionLocal", lambda: nullcontext(db))
+    transport = Mock()
+    handler = NotificationHandler(transport)
+    monkeypatch.setattr(notifications, "get_notification_handler", lambda: handler)
+    assert _sale_action(client, "post", "/api/sales").status_code == 201
+    assert transport.send_message.call_args.args[1] == 11
+    assert _telegram_command(client, "/stop", 11).status_code == 200
+    transport.reset_mock()
+    assert _sale_action(client, "post", "/api/sales").status_code == 201
+    transport.send_message.assert_not_called()
+
+
+def test_subscriber_query_failure_preserves_successful_sale(client, monkeypatch, caplog):
+    def unavailable():
+        raise SQLAlchemyError("private database error")
+
+    transport = Mock()
+    handler = NotificationHandler(transport, unavailable)
+    monkeypatch.setattr(notifications, "get_notification_handler", lambda: handler)
+    response = _sale_action(client, "post", "/api/sales")
+    assert response.status_code == 201
+    transport.send_message.assert_not_called()
+    assert "event=SaleCreated" in caplog.text and "error_type=SQLAlchemyError" in caplog.text
+    assert "private database error" not in caplog.text
+    db = app.dependency_overrides[get_db]()
+    assert db.get(Sale, response.json()["id"]).quantity == 2

@@ -1,5 +1,24 @@
 # Verification
 
+## Open Telegram subscriptions — 2026-10-07
+
+- Full suite: **175 passed**; standalone notification unit suite: **43 passed**.
+  All bot HTTP calls and webhook registration were mocked.
+- `/start` accepts every chat, registers/reactivates it and updates available
+  metadata. `/stop` deactivates it. Confirmations follow successful commits;
+  failures do not undo subscription state. No invitation/authentication/approval
+  logic or webhook secret was added.
+- Sale events broadcast only to current active subscribers. Failures are isolated
+  per recipient; subscriber lookup failure preserves successful sale responses.
+- Subscriber table initialized in the configured demo database; existing business
+  counts preserved. Existing seed/launcher handles initialization for future runs.
+- Backend/launcher Ruff, notification-file formatting, dependency and whitespace
+  checks passed. Temporary backend startup, database health, open webhook and
+  registration CLI help passed. No real webhook was registered.
+- Credentials found in the tracked environment example were replaced by empty
+  placeholders. Local .env files were not modified. `TELEGRAM_CHAT_ID` is ignored.
+- [Setup and architecture](backend/TELEGRAM.md).
+
 ## Docker database migration — 2026-10-07
 
 - Docker Desktop is running using the `desktop-linux` context. The launcher now
@@ -182,4 +201,21 @@
 - Vercel/Render configuration and instructions are included; no remote resources were provisioned or deployment tested.
 - TestClient emits a third-party Starlette deprecation warning about its httpx adapter. Tests pass; this is not an application failure.
 - Data is generated demo data stored in PostgreSQL, not connected to an external sales system.
+
+## Telegram sale notifications — 2026-10-07
+
+- Baseline suite: 66 passed. Final suite: **139 passed**, including 73 new cases.
+  Telegram is mocked throughout; no real bot requests were made.
+- Create/update/delete publish immutable events after successful commit/refresh.
+  PostgreSQL tests verify ordering, snapshots, rollback/no delivery on failure,
+  correct messages and preserved API success/data during Telegram failures.
+- Unit tests verify formatting/diffs, optional settings, HTTP/API/JSON/network
+  errors, timeout/redirect configuration, secret masking and httpx URL redaction.
+- Backend/launcher Ruff, new-file formatter checks, `pip check`, imports and diff
+  whitespace checks passed. No backend type checker is configured.
+- Temporary Uvicorn startup, live database health, sale OpenAPI routes and missing
+  Telegram credentials warning passed; the verification process was stopped.
+- Existing TestClient deprecation warning remains. Tests disable pytest's cache
+  provider due to local cache permissions. Frontend was unchanged.
+- [Architecture, file inventory, commands and limitations](backend/TELEGRAM.md).
 
