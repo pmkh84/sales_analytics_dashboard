@@ -11,6 +11,7 @@
 - Loading skeletons, empty states, retries, and readable database/AI errors.
 - 100 customers, 30 products, and 1,500 seeded transactions across seven months.
 - No authentication or unnecessary infrastructure.
+- USD/Toman dashboard card with a backend cache and last-known-rate fallback.
 
 ## Architecture
 
@@ -204,6 +205,42 @@ Open **http://localhost:5173** (use this exact origin to match CORS).
 The dev server uses port 5173 strictly. If that port is occupied, stop the existing process or intentionally update the port and `FRONTEND_URL` together.
 
 For macOS/Linux, use `python3 -m venv .venv`, `.venv/bin/python` (or `../.venv/bin/python` from backend), `cp` instead of `Copy-Item`, and `npm` instead of `npm.cmd`.
+
+## USD / Toman exchange rate
+
+The Dashboard header displays Navasan's Tehran USD sell rate in Toman, with
+thousands separators and the provider's update time in Tehran time. This is an
+independent request: loading or provider failure does not block sales analytics.
+
+Configure these **backend-only** settings in `backend/.env`, then restart the API:
+
+```dotenv
+EXCHANGE_RATE_API_KEY=
+EXCHANGE_RATE_API_URL=https://api.navasan.tech/latest/
+EXCHANGE_RATE_CACHE_TTL_SECONDS=120
+EXCHANGE_RATE_TIMEOUT_SECONDS=5
+```
+
+Obtain a key from [Navasan](https://www.navasan.tech/api/). Its documented
+[`usd_buy` API](https://www.navasan.tech/api/webserviceguide/) supplies a value
+and Unix update timestamp; the [market rate page](https://www.navasan.net/dayRates.php?item=usd_buy)
+identifies the unit as Toman. The adapter uses that value directly, without
+dividing it by ten. A provider returning Rial would require backend division by ten.
+
+`GET /api/exchange-rate` returns `base`, `quote` (`IRT`), `rate`, `updated_at`,
+`source` and `stale`. A per-process cache refreshes on demand after the configured
+TTL; a failed refresh returns the previous value marked **Last known rate**.
+Without a previous value, it returns HTTP 503 and the card displays
+**Exchange rate unavailable**. Leaving the key blank keeps the rest of the app usable.
+
+The default two-minute cache can consume up to 30 provider requests per hour per
+active API process. Navasan's documented trial allows only 120 requests/month and
+updates every two hours; choose a suitable plan or increase the TTL for a trial.
+An API success does not guarantee a recently updated market quote: the displayed
+time is always the provider timestamp. Live authenticated provider access has not
+been verified. No frontend credential or database migration is required.
+
+See [exchange-rate architecture, file inventory, checks and limitations](backend/EXCHANGE_RATE.md).
 
 ## Telegram Notifications Setup
 
@@ -433,6 +470,7 @@ All analytics and AI routes accept optional `start_date=YYYY-MM-DD` and `end_dat
 | Method | Endpoint | Response / parameters |
 | --- | --- | --- |
 | GET | `/api/health` | Database connection and AI configuration status |
+| GET | `/api/exchange-rate` | USD/Toman rate, provider update time, source and stale flag; 503 when unavailable without cache |
 | GET | `/api/dashboard/summary` | Revenue, orders, buyers, AOV, growth, previous revenue, dates |
 | GET | `/api/dashboard/revenue-trend` | `date`, `revenue`, `orders`; `interval=day\|month` |
 | GET | `/api/dashboard/categories` | Category, revenue, orders, units |

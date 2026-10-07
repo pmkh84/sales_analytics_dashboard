@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { CalendarDays, RefreshCw } from "lucide-react";
 import { Layout } from "./components/Layout";
+import { ExchangeRateCard } from "./components/ExchangeRateCard";
 import { DashboardSkeleton, ErrorState } from "./components/States";
 import { useDashboard } from "./hooks/useDashboard";
 import { Dashboard } from "./pages/Dashboard";
@@ -27,27 +28,30 @@ export default function App() {
           <h1>{page === "Dashboard" ? "Sales overview" : page}</h1>
           <p>{descriptions[page]}</p>
         </div>
-        <div className="page-actions">
-          <label className="date-select">
-            <CalendarDays size={16} />
-            <span className="sr-only">Date range</span>
-            <select
-              value={days}
-              onChange={(event) => setDays(Number(event.target.value))}
+        <div className="dashboard-tools">
+          {page === "Dashboard" && <ExchangeRateCard revision={revision} />}
+          <div className="page-actions">
+            <label className="date-select">
+              <CalendarDays size={16} />
+              <span className="sr-only">Date range</span>
+              <select
+                value={days}
+                onChange={(event) => setDays(Number(event.target.value))}
+              >
+                <option value={30}>Last 30 days</option>
+                <option value={90}>Last 90 days</option>
+                <option value={210}>Last 7 months</option>
+              </select>
+            </label>
+            <button
+              className="icon-button refresh"
+              aria-label="Refresh dashboard"
+              disabled={loading}
+              onClick={() => setRevision((value) => value + 1)}
             >
-              <option value={30}>Last 30 days</option>
-              <option value={90}>Last 90 days</option>
-              <option value={210}>Last 7 months</option>
-            </select>
-          </label>
-          <button
-            className="icon-button refresh"
-            aria-label="Refresh dashboard"
-            disabled={loading}
-            onClick={() => setRevision((value) => value + 1)}
-          >
-            <RefreshCw size={17} className={loading ? "animate-spin" : ""} />
-          </button>
+              <RefreshCw size={17} className={loading ? "animate-spin" : ""} />
+            </button>
+          </div>
         </div>
       </div>
       <div className="period-line">

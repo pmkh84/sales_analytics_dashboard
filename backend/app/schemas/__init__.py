@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -101,3 +102,13 @@ class Health(BaseModel):
     status: str
     database: str
     ai_configured: bool
+
+
+class ExchangeRate(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    base: Literal["USD"] = "USD"
+    quote: Literal["IRT"] = "IRT"
+    rate: float = Field(gt=0, le=1_000_000_000_000, allow_inf_nan=False)
+    updated_at: datetime
+    source: Literal["Navasan"] = "Navasan"
+    stale: bool = False

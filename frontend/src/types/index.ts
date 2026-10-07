@@ -75,3 +75,12 @@ export interface DashboardData {
   categories: Category[];
   products: Product[];
 }
+
+export interface ExchangeRate {
+  base: "USD";
+  quote: "IRT";
+  rate: number;
+  updated_at: string;
+  source: "Navasan";
+  stale: boolean;
+}

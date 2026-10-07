@@ -6,6 +6,7 @@ import type {
   CustomerOption,
   DashboardData,
   DateRange,
+  ExchangeRate,
   Insight,
   Product,
   ProductOption,
@@ -67,6 +68,15 @@ export async function getSales(
 }
 export async function getCustomers(signal: AbortSignal) {
   return (await api.get<CustomerOption[]>("/api/customers", { signal })).data;
+}
+
+export async function getExchangeRate(signal: AbortSignal) {
+  return (
+    await api.get<ExchangeRate>("/api/exchange-rate", {
+      signal,
+      timeout: 10000,
+    })
+  ).data;
 }
 export async function getProducts(signal: AbortSignal) {
   return (await api.get<ProductOption[]>("/api/products", { signal })).data;

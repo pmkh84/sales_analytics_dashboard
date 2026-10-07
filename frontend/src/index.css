@@ -330,6 +330,43 @@ h1 {
   align-items: center;
   gap: 9px;
 }
+.dashboard-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.dashboard-tools .page-actions {
+  margin-top: 0;
+}
+.exchange-rate-card {
+  display: grid;
+  gap: 5px;
+  min-width: 180px;
+  padding: 11px 14px;
+}
+.exchange-rate-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: #6e7d63;
+}
+.exchange-rate-value {
+  font-size: 19px;
+  font-weight: 600;
+  color: #365b43;
+  font-variant-numeric: tabular-nums;
+}
+.exchange-rate-value > span {
+  font-size: 12px;
+  font-weight: 500;
+}
+.exchange-rate-meta {
+  font-size: 9px;
+  color: #8c9588;
+}
+.exchange-rate-stale {
+  color: #967044;
+}
 .date-select {
   display: flex;
   align-items: center;
@@ -1230,6 +1267,9 @@ footer {
     margin-bottom: 17px;
   }
   .page-actions {
+    margin-top: 18px;
+  }
+  .dashboard-tools {
     margin-top: 18px;
   }
   .date-select {

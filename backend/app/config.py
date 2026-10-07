@@ -18,6 +18,23 @@ class Settings(BaseSettings):
     telegram_enabled: bool = True
     telegram_api_url: str = "https://api.telegram.org"
     telegram_timeout_seconds: float = Field(default=3.0, gt=0, le=30, allow_inf_nan=False)
+    exchange_rate_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    exchange_rate_api_url: str = "https://api.navasan.tech/latest/?api_key="
+    exchange_rate_cache_ttl_seconds: int = Field(default=120, ge=1, le=86400)
+    exchange_rate_timeout_seconds: float = Field(default=5.0, gt=0, le=30, allow_inf_nan=False)
+
+    @field_validator("exchange_rate_api_url")
+    @classmethod
+    def valid_exchange_rate_api_url(cls, value: str) -> str:
+        from urllib.parse import urlsplit
+
+        url = urlsplit(value)
+        if (
+            url.scheme != "https" or not url.netloc or url.username is not None
+            or url.password is not None or url.query or url.fragment
+        ):
+            raise ValueError("EXCHANGE_RATE_API_URL must be HTTPS without credentials, query or fragment.")
+        return value
 
     @field_validator("telegram_api_url")
     @classmethod

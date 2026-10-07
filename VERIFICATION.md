@@ -1,5 +1,30 @@
 # Verification
 
+## USD/Toman dashboard display — 2026-10-07
+
+- Full backend suite: **217 passed**, including **42 exchange-rate cases** with
+  mocked external HTTP. Parsing, IRR/IRT normalization, cache expiry/concurrency,
+  stale fallback/recovery, invalid responses, safe errors/logging and endpoint
+  shape are covered. Existing business and Telegram tests continue to pass.
+- TypeScript type checking and Vite production build passed. Backend/script Ruff,
+  feature formatting and whitespace checks passed.
+- React rendering checked loading, success, stale and unavailable card states,
+  thousands separators, Persian currency label and provider timestamp in Tehran time.
+  No browser was available through the browser tool; visual desktop/mobile checks
+  and real browser interaction remain manual.
+- Temporary Uvicorn startup on port 18001 passed: OpenAPI registration, live
+  database health and missing-key HTTP 503. Telegram delivery and provider access
+  were disabled for this check; the verification server was stopped afterward.
+- No authenticated live provider call was made. Navasan requires a key and its
+  trial quota/update frequency may require a longer TTL or suitable paid plan.
+- In-process cache defaults to two minutes. Failed refreshes retain the provider
+  timestamp and mark the previous quote stale; failures without cache stay isolated
+  from analytics. Restart clears cache; multiple processes have separate caches.
+- Business models, pricing calculations, Telegram code and sales UI/formatting
+  remain unchanged. Local environment files were not modified; the new example
+  credential is blank. No dependency, Redis, worker or migration was added.
+- [Architecture, complete file inventory, commands and limitations](backend/EXCHANGE_RATE.md).
+
 ## Open Telegram subscriptions — 2026-10-07
 
 - Full suite: **175 passed**; standalone notification unit suite: **43 passed**.

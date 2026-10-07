@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.database import get_db
 from app.notifications.service import get_notification_handler
-from app.routers import ai, dashboard, sales, telegram
+from app.routers import ai, dashboard, exchange_rate, sales, telegram
 from app.schemas import Health
 
 
@@ -33,6 +33,7 @@ app.include_router(dashboard.router)
 app.include_router(ai.router)
 app.include_router(sales.router)
 app.include_router(telegram.router)
+app.include_router(exchange_rate.router)
 
 
 @app.exception_handler(SQLAlchemyError)
