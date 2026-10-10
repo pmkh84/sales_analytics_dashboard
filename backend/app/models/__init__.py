@@ -31,6 +31,13 @@ class Sale(Base):
     __table_args__ = (
         CheckConstraint("quantity > 0", name="positive_quantity"),
         CheckConstraint("total_amount >= 0", name="positive_total"),
+        CheckConstraint(
+            "(exchange_rate_toman IS NULL AND total_amount_toman IS NULL) OR "
+            "(exchange_rate_toman IS NOT NULL AND total_amount_toman IS NOT NULL "
+            "AND exchange_rate_toman > 0 AND total_amount_toman >= 0 "
+            "AND total_amount_toman = round(total_amount * exchange_rate_toman, 2))",
+            name="historical_pricing_consistent",
+        ),
         Index("ix_sales_created_id", "created_at", "id"),
     )
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -38,6 +45,8 @@ class Sale(Base):
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
     quantity: Mapped[int]
     total_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    exchange_rate_toman: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    total_amount_toman: Mapped[Decimal | None] = mapped_column(Numeric(32, 2))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     customer: Mapped[Customer] = relationship(back_populates="sales")
     product: Mapped[Product] = relationship(back_populates="sales")

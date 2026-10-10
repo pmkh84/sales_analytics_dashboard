@@ -61,6 +61,18 @@ export default function App() {
         </span>
         <span>Compared with the previous {days} days</span>
       </div>
+      {data &&
+        (data.summary.legacy_orders > 0 ||
+          data.summary.previous_legacy_orders > 0) && (
+          <div className="analysis-banner" role="status">
+            Historical Toman totals are unavailable for{" "}
+            {data.summary.legacy_orders} sales in this period and{" "}
+            {data.summary.previous_legacy_orders} in the previous period.
+            Revenue and average order value include only sales with recorded
+            Toman totals; order/customer counts include all sales. Growth
+            comparison is unavailable for incomplete periods.
+          </div>
+        )}
       {loading ? (
         <DashboardSkeleton />
       ) : error ? (

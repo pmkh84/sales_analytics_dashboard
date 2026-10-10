@@ -1,4 +1,4 @@
-"""Read Navasan's Tehran USD sell rate through a bounded in-process cache."""
+"""Read Navasan's Tehran USD buy rate through a bounded in-process cache."""
 
 import logging
 import re
@@ -36,9 +36,9 @@ class _RedactAPIKey(logging.Filter):
         return True
 
 
-def normalize_to_toman(value: str | int | float | Decimal, unit: Literal["IRR", "IRT"]) -> Decimal:
+def normalize_to_toman(value: str | int | Decimal, unit: Literal["IRR", "IRT"]) -> Decimal:
     """Never infer currency units from magnitude; use the provider's documented unit."""
-    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+    if isinstance(value, bool) or not isinstance(value, (str, int, Decimal)):
         raise ProviderError("invalid_rate")
     try:
         amount = Decimal(str(value))
@@ -100,7 +100,7 @@ class ExchangeRateService:
                 )
             if not response.is_success:
                 raise ProviderError("http_status", response.status_code)
-            payload = response.json()
+            payload = response.json(parse_float=Decimal)
             entry = payload["usd_buy"]
             # Navasan's usd_buy is denominated in Toman; do not divide it again.
             rate = normalize_to_toman(entry["value"], "IRT")
@@ -110,7 +110,7 @@ class ExchangeRateService:
             updated_at = datetime.fromtimestamp(timestamp, timezone.utc)
             if updated_at > datetime.now(timezone.utc):
                 raise ProviderError("invalid_timestamp")
-            return ExchangeRate(rate=float(rate), updated_at=updated_at)
+            return ExchangeRate(rate=rate, updated_at=updated_at)
         except httpx.HTTPError:
             raise ProviderError("transport_error") from None
         except (KeyError, TypeError, ValueError, OverflowError, OSError):

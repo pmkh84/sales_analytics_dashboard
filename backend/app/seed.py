@@ -6,7 +6,8 @@ from decimal import Decimal
 
 from sqlalchemy import func, select, text
 
-from app.database import Base, SessionLocal, engine
+from app.database import SessionLocal
+from app.migrate import migrate
 from app.models import Customer, Product, Sale
 
 CATALOG = {
@@ -56,7 +57,7 @@ LAST = ["Chen", "Patel", "Smith", "Garcia", "Kim", "Wilson", "Brown", "Davis", "
 
 
 def seed():
-    Base.metadata.create_all(engine)
+    migrate()
     rng = random.Random(42)
     now = datetime.now(timezone.utc)
     start = (now - timedelta(days=210)).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -95,6 +96,9 @@ def seed():
                     product_id=product.id,
                     quantity=quantity,
                     total_amount=(product.price * quantity * discount).quantize(Decimal("0.01")),
+                    # Seed dates have no trustworthy historical rates.
+                    exchange_rate_toman=None,
+                    total_amount_toman=None,
                     created_at=when,
                 )
             )

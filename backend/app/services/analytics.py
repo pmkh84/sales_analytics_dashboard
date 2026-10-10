@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 
 from fastapi import HTTPException
 from sqlalchemy import distinct, func, select
@@ -46,23 +47,46 @@ def conditions(period: Period):
 
 
 def summary(db: Session, period: Period) -> dict:
-    revenue, orders, customers = db.execute(
+    revenue, orders, customers, priced_orders = db.execute(
         select(
-            func.coalesce(func.sum(Sale.total_amount), 0),
+            func.coalesce(func.sum(Sale.total_amount_toman), 0),
             func.count(Sale.id),
             func.count(distinct(Sale.customer_id)),
+            func.count(Sale.total_amount_toman),
         ).where(*conditions(period))
     ).one()
-    previous = db.scalar(
-        select(func.coalesce(func.sum(Sale.total_amount), 0)).where(*conditions(period.previous))
-    )
+    previous, previous_orders, previous_priced = db.execute(
+        select(
+            func.coalesce(func.sum(Sale.total_amount_toman), 0),
+            func.count(Sale.id),
+            func.count(Sale.total_amount_toman),
+        ).where(*conditions(period.previous))
+    ).one()
+    legacy = orders - priced_orders
+    previous_legacy = previous_orders - previous_priced
+    with localcontext() as context:
+        context.prec = 40
+        average = (
+            (revenue / priced_orders).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            if priced_orders
+            else Decimal(0)
+        )
+        growth = (
+            float(round((revenue - previous) / previous * 100, 2))
+            if previous and not legacy and not previous_legacy
+            else None
+        )
     return {
-        "total_revenue": float(revenue),
+        "total_revenue": revenue,
         "total_orders": orders,
         "total_customers": customers,
-        "average_order_value": float(round(revenue / orders, 2)) if orders else 0,
-        "revenue_growth": float(round((revenue - previous) / previous * 100, 2)) if previous else None,
-        "previous_revenue": float(previous),
+        "average_order_value": average,
+        "revenue_growth": growth,
+        "previous_revenue": previous,
+        "currency": "IRT",
+        "priced_orders": priced_orders,
+        "legacy_orders": legacy,
+        "previous_legacy_orders": previous_legacy,
         "start_date": period.start,
         "end_date": period.end,
     }
@@ -71,16 +95,16 @@ def summary(db: Session, period: Period) -> dict:
 def revenue_trend(db: Session, period: Period, interval: str = "day") -> list[dict]:
     bucket = func.date_trunc(interval, Sale.created_at)
     rows = db.execute(
-        select(bucket, func.sum(Sale.total_amount), func.count(Sale.id))
+        select(bucket, func.coalesce(func.sum(Sale.total_amount_toman), 0), func.count(Sale.id))
         .where(*conditions(period))
         .group_by(bucket)
         .order_by(bucket)
     ).all()
-    values = {row[0].date(): (float(row[1]), row[2]) for row in rows}
+    values = {row[0].date(): (row[1], row[2]) for row in rows}
     cursor = period.start if interval == "day" else period.start.replace(day=1)
     result = []
     while cursor <= period.end:
-        revenue, orders = values.get(cursor, (0, 0))
+        revenue, orders = values.get(cursor, (Decimal(0), 0))
         result.append({"date": cursor, "revenue": revenue, "orders": orders})
         if interval == "day":
             cursor += timedelta(days=1)
@@ -93,30 +117,34 @@ def categories(db: Session, period: Period) -> list[dict]:
     rows = db.execute(
         select(
             Product.category,
-            func.sum(Sale.total_amount).label("revenue"),
+            func.coalesce(func.sum(Sale.total_amount_toman), 0).label("revenue"),
             func.count(Sale.id),
             func.sum(Sale.quantity),
         )
         .join(Product, Sale.product_id == Product.id)
         .where(*conditions(period))
         .group_by(Product.category)
-        .order_by(func.sum(Sale.total_amount).desc(), Product.category)
+        .order_by(func.coalesce(func.sum(Sale.total_amount_toman), 0).desc(), Product.category)
     )
-    return [{"category": r[0], "revenue": float(r[1]), "orders": r[2], "units": r[3]} for r in rows]
+    return [{"category": r[0], "revenue": r[1], "orders": r[2], "units": r[3]} for r in rows]
 
 
 def top_products(db: Session, period: Period, limit: int = 5) -> list[dict]:
     rows = db.execute(
         select(
-            Product.id, Product.name, Product.category, func.sum(Sale.total_amount), func.sum(Sale.quantity)
+            Product.id,
+            Product.name,
+            Product.category,
+            func.coalesce(func.sum(Sale.total_amount_toman), 0),
+            func.sum(Sale.quantity),
         )
         .join(Product, Sale.product_id == Product.id)
         .where(*conditions(period))
         .group_by(Product.id)
-        .order_by(func.sum(Sale.total_amount).desc(), Product.id)
+        .order_by(func.coalesce(func.sum(Sale.total_amount_toman), 0).desc(), Product.id)
         .limit(limit)
     )
-    return [{"id": r[0], "name": r[1], "category": r[2], "revenue": float(r[3]), "units": r[4]} for r in rows]
+    return [{"id": r[0], "name": r[1], "category": r[2], "revenue": r[3], "units": r[4]} for r in rows]
 
 
 def recent_sales(db: Session, period: Period, limit: int, offset: int) -> dict:
@@ -138,7 +166,9 @@ def recent_sales(db: Session, period: Period, limit: int, offset: int) -> dict:
             "product_name": product,
             "category": category,
             "quantity": sale.quantity,
-            "total_amount": float(sale.total_amount),
+            "total_amount": sale.total_amount,
+            "exchange_rate_toman": sale.exchange_rate_toman,
+            "total_amount_toman": sale.total_amount_toman,
             "created_at": sale.created_at,
         }
         for sale, customer, product, category in rows
@@ -150,12 +180,13 @@ def recent_sales(db: Session, period: Period, limit: int, offset: int) -> dict:
 def analytics_context(db: Session, period: Period) -> dict:
     # Aggregate-only payload: no transaction records, customer names or emails.
     return {
-        "currency": "USD",
+        "currency": "IRT",
         "timezone": "UTC",
         "definitions": {
             "orders": "Each sale record is one single-product order.",
             "customers": "Distinct purchasing customers in the selected period.",
-            "growth": "Revenue compared with the immediately preceding equal-length period.",
+            "growth": "Historical Toman revenue compared with the immediately preceding equal-length period, unavailable when either period has legacy sales.",
+            "money_coverage": "Only saved historical Toman totals count toward revenue. AOV divides by priced_orders; orders/customers include legacy sales. Null legacy amounts are unavailable, never converted with the current rate.",
             "limitations": "No cost, profit, marketing, inventory, or causal attribution data.",
         },
         "selected_period": summary(db, period),

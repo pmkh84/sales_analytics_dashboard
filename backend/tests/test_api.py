@@ -23,6 +23,9 @@ from app.notifications import service as notifications
 from app.notifications import subscriptions
 from app.notifications.service import NotificationHandler
 from app.notifications.telegram import TelegramClient
+from app.schemas import ExchangeRate
+from app.services import pricing
+from app.services.exchange_rate import get_exchange_rate_service
 
 SALE_PAYLOAD = {"customer_id": 1, "product_id": 1, "quantity": 2}
 SALE_ACTIONS = [
@@ -30,6 +33,40 @@ SALE_ACTIONS = [
     ("patch", "/api/sales/3", 200, SaleUpdated),
     ("delete", "/api/sales/3", 204, SaleDeleted),
 ]
+
+
+class DecimalTestClient(TestClient):
+    """Decode Decimal strings for arithmetic assertions; raw JSON contract is tested separately."""
+
+    def request(self, *args, **kwargs):
+        response = super().request(*args, **kwargs)
+        original_json = response.json
+        money_fields = {
+            "total_amount",
+            "total_amount_toman",
+            "exchange_rate_toman",
+            "price",
+            "price_usd",
+            "price_toman",
+            "total_revenue",
+            "previous_revenue",
+            "average_order_value",
+            "revenue",
+            "rate",
+        }
+
+        def decode(value):
+            if isinstance(value, dict):
+                return {
+                    key: Decimal(item) if key in money_fields and isinstance(item, str) else decode(item)
+                    for key, item in value.items()
+                }
+            if isinstance(value, list):
+                return [decode(item) for item in value]
+            return value
+
+        response.json = lambda **options: decode(original_json(**options))
+        return response
 
 
 @pytest.fixture(autouse=True)
@@ -41,7 +78,14 @@ def notification_handler(monkeypatch):
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    rate_service = Mock()
+    rate_service.get_rate.return_value = ExchangeRate(
+        rate=Decimal("1"), updated_at=datetime.now(timezone.utc)
+    )
+    monkeypatch.setattr(pricing, "get_exchange_rate_service", lambda: rate_service)
+    monkeypatch.setattr("app.services.sales.get_exchange_rate_service", lambda: rate_service)
+    app.dependency_overrides[get_exchange_rate_service] = lambda: rate_service
     with engine.connect() as connection:
         transaction = connection.begin()
         schema = "test_" + uuid4().hex
@@ -60,13 +104,15 @@ def client():
                     product_id=product.id,
                     quantity=quantity,
                     total_amount=Decimal(amount),
+                    exchange_rate_toman=Decimal("1"),
+                    total_amount_toman=Decimal(amount),
                     created_at=datetime(2025, 1, day, tzinfo=timezone.utc),
                 )
             )
         db.commit()
         app.dependency_overrides[get_db] = lambda: db
         try:
-            with TestClient(app) as test_client:
+            with DecimalTestClient(app) as test_client:
                 yield test_client
         finally:
             app.dependency_overrides.clear()
@@ -89,7 +135,11 @@ def test_update_sale_persists_and_updates_analytics(client):
     response = client.patch("/api/sales/3", json=payload)
     assert response.status_code == 200
     assert response.json() == {
-        **payload, "id": 3, "total_amount": 59.97,
+        **payload,
+        "id": 3,
+        "total_amount": Decimal("59.97"),
+        "exchange_rate_toman": Decimal("1"),
+        "total_amount_toman": Decimal("59.97"),
         "created_at": original_date.isoformat().replace("+00:00", "Z"),
     }
     db.expire_all()
@@ -101,35 +151,38 @@ def test_update_sale_persists_and_updates_analytics(client):
     assert sale.created_at == original_date
     summary = client.get("/api/dashboard/summary", params=PARAMS).json()
     assert summary["total_orders"] == 2
-    assert summary["total_revenue"] == 109.97
+    assert summary["total_revenue"] == Decimal("109.97")
     assert summary["total_customers"] == 2
     recent = client.get("/api/sales/recent", params=PARAMS).json()["items"][0]
     assert recent["customer_id"] == customer.id
     assert recent["product_id"] == product.id
     assert recent["quantity"] == 3
-    assert recent["total_amount"] == 59.97
+    assert recent["total_amount"] == Decimal("59.97")
     assert recent["category"] == "Books"
     trend = client.get("/api/dashboard/revenue-trend", params=PARAMS).json()
-    assert trend[-1] == {"date": "2025-01-04", "revenue": 59.97, "orders": 1}
+    assert trend[-1] == {"date": "2025-01-04", "revenue": Decimal("59.97"), "orders": 1}
     categories = client.get("/api/dashboard/categories", params=PARAMS).json()
     assert categories == [
-        {"category": "Books", "revenue": 59.97, "orders": 1, "units": 3},
+        {"category": "Books", "revenue": Decimal("59.97"), "orders": 1, "units": 3},
         {"category": "Electronics", "revenue": 50, "orders": 1, "units": 1},
     ]
     products = client.get("/api/dashboard/top-products", params=PARAMS).json()
     assert products[0]["id"] == product.id
-    assert products[0]["revenue"] == 59.97
-    # Saving unchanged fields must still use the current price.
+    assert products[0]["revenue"] == Decimal("59.97")
+    # Saving unchanged financial inputs preserves history even if the product price changes.
     product.price = Decimal("20.01")
     db.commit()
-    assert client.patch("/api/sales/3", json=payload).json()["total_amount"] == 60.03
+    assert client.patch("/api/sales/3", json=payload).json()["total_amount"] == Decimal("59.97")
 
 
-@pytest.mark.parametrize("sale_id,payload,detail", [
-    (999, {"customer_id": 1, "product_id": 1, "quantity": 2}, "Sale not found."),
-    (3, {"customer_id": 999, "product_id": 1, "quantity": 2}, "Customer not found."),
-    (3, {"customer_id": 1, "product_id": 999, "quantity": 2}, "Product not found."),
-])
+@pytest.mark.parametrize(
+    "sale_id,payload,detail",
+    [
+        (999, {"customer_id": 1, "product_id": 1, "quantity": 2}, "Sale not found."),
+        (3, {"customer_id": 999, "product_id": 1, "quantity": 2}, "Customer not found."),
+        (3, {"customer_id": 1, "product_id": 999, "quantity": 2}, "Product not found."),
+    ],
+)
 def test_update_missing_entities(client, sale_id, payload, detail):
     response = client.patch(f"/api/sales/{sale_id}", json=payload)
     assert response.status_code == 404
@@ -137,11 +190,21 @@ def test_update_missing_entities(client, sale_id, payload, detail):
     assert client.get("/api/dashboard/summary", params=PARAMS).json()["total_revenue"] == 200
 
 
-@pytest.mark.parametrize("changes", [
-    {"quantity": 0}, {"quantity": -1}, {"quantity": 1.5}, {"quantity": True},
-    {"quantity": "2"}, {"quantity": None}, {"quantity": 2147483648},
-    {"customer_id": None}, {"product_id": 0}, {"total_amount": 1},
-])
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"quantity": 0},
+        {"quantity": -1},
+        {"quantity": 1.5},
+        {"quantity": True},
+        {"quantity": "2"},
+        {"quantity": None},
+        {"quantity": 2147483648},
+        {"customer_id": None},
+        {"product_id": 0},
+        {"total_amount": 1},
+    ],
+)
 def test_update_invalid_fields(client, changes):
     payload = {"customer_id": 1, "product_id": 1, "quantity": 2, **changes}
     assert client.patch("/api/sales/3", json=payload).status_code == 422
@@ -169,11 +232,14 @@ def test_update_overflow_and_commit_failure_leave_sale_unchanged(client):
 
 
 def test_update_cors(client):
-    response = client.options("/api/sales/3", headers={
-        "Origin": get_settings().frontend_url,
-        "Access-Control-Request-Method": "PATCH",
-        "Access-Control-Request-Headers": "content-type",
-    })
+    response = client.options(
+        "/api/sales/3",
+        headers={
+            "Origin": get_settings().frontend_url,
+            "Access-Control-Request-Method": "PATCH",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
     assert response.status_code == 200
     assert "PATCH" in response.headers["access-control-allow-methods"]
 
@@ -227,17 +293,29 @@ def test_delete_failure_rolls_back(client):
 
 
 def test_delete_cors(client):
-    response = client.options("/api/sales/3", headers={
-        "Origin": get_settings().frontend_url,
-        "Access-Control-Request-Method": "DELETE",
-    })
+    response = client.options(
+        "/api/sales/3",
+        headers={
+            "Origin": get_settings().frontend_url,
+            "Access-Control-Request-Method": "DELETE",
+        },
+    )
     assert response.status_code == 200
     assert "DELETE" in response.headers["access-control-allow-methods"]
 
 
 def test_sale_options(client):
     assert client.get("/api/customers").json() == [{"id": 1, "name": "Test Buyer"}]
-    assert client.get("/api/products").json() == [{"id": 1, "name": "Test Product", "price": 50}]
+    assert client.get("/api/products").json() == [
+        {
+            "id": 1,
+            "name": "Test Product",
+            "price": 50,
+            "price_usd": 50,
+            "price_toman": 50,
+            "exchange_rate_stale": False,
+        }
+    ]
 
 
 def test_create_sale_persists_and_updates_analytics(client):
@@ -250,27 +328,35 @@ def test_create_sale_persists_and_updates_analytics(client):
     sale = response.json()
     assert sale["customer_id"] == sale["product_id"] == 1
     assert sale["quantity"] == 3
-    assert sale["total_amount"] == 59.97
+    assert sale["total_amount"] == Decimal("59.97")
     assert sale["created_at"]
     db.expire_all()
     assert db.get(Sale, sale["id"]).total_amount == Decimal("59.97")
     after = client.get("/api/dashboard/summary").json()
     assert after["total_orders"] == before["total_orders"] + 1
-    assert after["total_revenue"] == pytest.approx(before["total_revenue"] + 59.97)
+    assert after["total_revenue"] == pytest.approx(before["total_revenue"] + Decimal("59.97"))
     recent = client.get("/api/sales/recent").json()
     assert recent["items"][0]["id"] == sale["id"]
     assert recent["items"][0]["customer_name"] == "Test Buyer"
     trend = client.get("/api/dashboard/revenue-trend").json()
     assert sum(point["revenue"] for point in trend) == pytest.approx(after["total_revenue"])
-    assert client.get("/api/dashboard/categories").json()[0]["revenue"] == 59.97
+    assert client.get("/api/dashboard/categories").json()[0]["revenue"] == Decimal("59.97")
     assert client.get("/api/dashboard/top-products").json()[0]["units"] == 3
 
 
 @pytest.mark.parametrize("quantity", [0, -1, 1.5, "2", True, None, 2147483648])
 def test_create_sale_invalid_quantity(client, quantity):
-    assert client.post("/api/sales", json={
-        "customer_id": 1, "product_id": 1, "quantity": quantity,
-    }).status_code == 422
+    assert (
+        client.post(
+            "/api/sales",
+            json={
+                "customer_id": 1,
+                "product_id": 1,
+                "quantity": quantity,
+            },
+        ).status_code
+        == 422
+    )
     assert client.get("/api/dashboard/summary").json()["total_orders"] == 0
 
 
@@ -279,14 +365,25 @@ def test_create_sale_missing_entity(client, field):
     payload = {"customer_id": 1, "product_id": 1, "quantity": 1, field: 999}
     response = client.post("/api/sales", json=payload)
     assert response.status_code == 404
-    assert response.json()["detail"] == ("Customer not found." if field == "customer_id" else "Product not found.")
+    assert response.json()["detail"] == (
+        "Customer not found." if field == "customer_id" else "Product not found."
+    )
     assert client.get("/api/dashboard/summary").json()["total_orders"] == 0
 
 
 def test_create_sale_rejects_client_total_and_missing_fields(client):
-    assert client.post("/api/sales", json={
-        "customer_id": 1, "product_id": 1, "quantity": 1, "total_amount": 0,
-    }).status_code == 422
+    assert (
+        client.post(
+            "/api/sales",
+            json={
+                "customer_id": 1,
+                "product_id": 1,
+                "quantity": 1,
+                "total_amount": 0,
+            },
+        ).status_code
+        == 422
+    )
     assert client.post("/api/sales", json={"quantity": 1}).status_code == 422
 
 
@@ -444,12 +541,15 @@ def test_health_rejects_missing_application_tables(client, table):
     assert response.json()["detail"] == "Database schema is not initialized. Run python -m app.seed."
 
 
-@pytest.mark.parametrize("sqlstate,expected", [
-    ("28P01", "Database authentication failed."),
-    ("3D000", "Configured database does not exist."),
-    ("42P01", "Database schema is not initialized."),
-    (None, "Database connection unavailable."),
-])
+@pytest.mark.parametrize(
+    "sqlstate,expected",
+    [
+        ("28P01", "Database authentication failed."),
+        ("3D000", "Configured database does not exist."),
+        ("42P01", "Database schema is not initialized."),
+        (None, "Database connection unavailable."),
+    ],
+)
 def test_database_errors_are_actionable_without_leaking_secrets(client, sqlstate, expected):
     from sqlalchemy.exc import OperationalError
 
@@ -472,7 +572,12 @@ def _sale_action(client, method, path):
 
 @pytest.mark.parametrize("method,path,status,event_type", SALE_ACTIONS)
 def test_notification_follows_commit_and_has_database_snapshot(
-    client, notification_handler, method, path, status, event_type,
+    client,
+    notification_handler,
+    method,
+    path,
+    status,
+    event_type,
 ):
     db = app.dependency_overrides[get_db]()
     original_commit, original_refresh = db.commit, db.refresh
@@ -515,7 +620,12 @@ def test_notification_follows_commit_and_has_database_snapshot(
 
 @pytest.mark.parametrize("method,path,status,event_type", SALE_ACTIONS)
 def test_commit_failure_rolls_back_without_notification(
-    client, notification_handler, method, path, status, event_type,
+    client,
+    notification_handler,
+    method,
+    path,
+    status,
+    event_type,
 ):
     db = app.dependency_overrides[get_db]()
     original_count = db.scalar(text("SELECT count(*) FROM sales"))
@@ -544,16 +654,21 @@ def test_refresh_failure_does_not_notify(client, notification_handler, method, p
     notification_handler.handle.assert_not_called()
 
 
-@pytest.mark.parametrize("method,path,payload,status", [
-    ("post", "/api/sales", {**SALE_PAYLOAD, "customer_id": 999}, 404),
-    ("patch", "/api/sales/3", {**SALE_PAYLOAD, "product_id": 999}, 404),
-    ("patch", "/api/sales/999", SALE_PAYLOAD, 404),
-    ("delete", "/api/sales/999", None, 404),
-    ("post", "/api/sales", {**SALE_PAYLOAD, "quantity": 0}, 422),
-    ("patch", "/api/sales/3", {**SALE_PAYLOAD, "quantity": 0}, 422),
-    ("delete", "/api/sales/0", None, 422),
-])
-def test_business_validation_failure_does_not_notify(client, notification_handler, method, path, payload, status):
+@pytest.mark.parametrize(
+    "method,path,payload,status",
+    [
+        ("post", "/api/sales", {**SALE_PAYLOAD, "customer_id": 999}, 404),
+        ("patch", "/api/sales/3", {**SALE_PAYLOAD, "product_id": 999}, 404),
+        ("patch", "/api/sales/999", SALE_PAYLOAD, 404),
+        ("delete", "/api/sales/999", None, 404),
+        ("post", "/api/sales", {**SALE_PAYLOAD, "quantity": 0}, 422),
+        ("patch", "/api/sales/3", {**SALE_PAYLOAD, "quantity": 0}, 422),
+        ("delete", "/api/sales/0", None, 422),
+    ],
+)
+def test_business_validation_failure_does_not_notify(
+    client, notification_handler, method, path, payload, status
+):
     kwargs = {} if payload is None else {"json": payload}
     assert getattr(client, method)(path, **kwargs).status_code == status
     notification_handler.handle.assert_not_called()
@@ -562,7 +677,14 @@ def test_business_validation_failure_does_not_notify(client, notification_handle
 @pytest.mark.parametrize("method,path,status,event_type", SALE_ACTIONS)
 @pytest.mark.parametrize("failure", ["http", "timeout", "api", "invalid_json", "unexpected"])
 def test_telegram_failure_preserves_api_success_and_data(
-    client, monkeypatch, caplog, method, path, status, event_type, failure,
+    client,
+    monkeypatch,
+    caplog,
+    method,
+    path,
+    status,
+    event_type,
+    failure,
 ):
     original_client = httpx.Client
     requests = []
@@ -575,15 +697,26 @@ def test_telegram_failure_preserves_api_success_and_data(
             raise RuntimeError("private credentials")
         if failure == "invalid_json":
             return httpx.Response(200, text="private response")
-        return httpx.Response(500 if failure == "http" else 200,
-                              json={"ok": False, "description": "private response"})
+        return httpx.Response(
+            500 if failure == "http" else 200, json={"ok": False, "description": "private response"}
+        )
 
-    monkeypatch.setattr("app.notifications.telegram.httpx.Client", lambda **kwargs: original_client(
-        **kwargs, transport=httpx.MockTransport(respond), trust_env=False,
-    ))
-    handler = NotificationHandler(TelegramClient(
-        "synthetic-marker", "https://example.invalid", 1,
-    ), lambda: [7])
+    monkeypatch.setattr(
+        "app.notifications.telegram.httpx.Client",
+        lambda **kwargs: original_client(
+            **kwargs,
+            transport=httpx.MockTransport(respond),
+            trust_env=False,
+        ),
+    )
+    handler = NotificationHandler(
+        TelegramClient(
+            "synthetic-marker",
+            "https://example.invalid",
+            1,
+        ),
+        lambda: [7],
+    )
     monkeypatch.setattr(notifications, "get_notification_handler", lambda: handler)
     response = _sale_action(client, method, path)
     assert response.status_code == status
@@ -604,13 +737,17 @@ def test_telegram_failure_preserves_api_success_and_data(
 
 
 @pytest.mark.parametrize("method,path,status,event_type", SALE_ACTIONS)
-def test_missing_notification_config_preserves_api_success(client, monkeypatch, method, path, status, event_type):
+def test_missing_notification_config_preserves_api_success(
+    client, monkeypatch, method, path, status, event_type
+):
     monkeypatch.setattr(notifications, "get_notification_handler", lambda: None)
     assert _sale_action(client, method, path).status_code == status
 
 
 @pytest.mark.parametrize("method,path,status,event_type", SALE_ACTIONS)
-def test_successful_api_operation_delivers_expected_message(client, monkeypatch, method, path, status, event_type):
+def test_successful_api_operation_delivers_expected_message(
+    client, monkeypatch, method, path, status, event_type
+):
     original_client = httpx.Client
     messages = []
 
@@ -620,12 +757,22 @@ def test_successful_api_operation_delivers_expected_message(client, monkeypatch,
         messages.append(json.loads(request.content)["text"])
         return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
 
-    monkeypatch.setattr("app.notifications.telegram.httpx.Client", lambda **kwargs: original_client(
-        **kwargs, transport=httpx.MockTransport(respond), trust_env=False,
-    ))
-    handler = NotificationHandler(TelegramClient(
-        "synthetic-marker", "https://example.invalid", 1,
-    ), lambda: [7])
+    monkeypatch.setattr(
+        "app.notifications.telegram.httpx.Client",
+        lambda **kwargs: original_client(
+            **kwargs,
+            transport=httpx.MockTransport(respond),
+            trust_env=False,
+        ),
+    )
+    handler = NotificationHandler(
+        TelegramClient(
+            "synthetic-marker",
+            "https://example.invalid",
+            1,
+        ),
+        lambda: [7],
+    )
     monkeypatch.setattr(notifications, "get_notification_handler", lambda: handler)
     assert _sale_action(client, method, path).status_code == status
     assert len(messages) == 1
@@ -647,15 +794,20 @@ def test_successful_api_operation_delivers_expected_message(client, monkeypatch,
 
 
 def _telegram_command(client, command, chat_id=9000000001, **metadata):
-    return client.post("/api/telegram/webhook", json={
-        "update_id": 1,
-        "message": {"chat": {"id": chat_id, "type": "private", **metadata}, "text": command},
-    })
+    return client.post(
+        "/api/telegram/webhook",
+        json={
+            "update_id": 1,
+            "message": {"chat": {"id": chat_id, "type": "private", **metadata}, "text": command},
+        },
+    )
 
 
 @pytest.mark.parametrize("chat_id", [123, 9000000001, -1009000000001])
 def test_start_accepts_any_chat_without_authorization(client, notification_handler, chat_id):
-    response = _telegram_command(client, "/start", chat_id, username="demo", first_name="Demo", last_name="User")
+    response = _telegram_command(
+        client, "/start", chat_id, username="demo", first_name="Demo", last_name="User"
+    )
     assert response.status_code == 200 and response.json() == {"ok": True}
     db = app.dependency_overrides[get_db]()
     subscriber = db.get(TelegramSubscriber, chat_id)
@@ -666,7 +818,9 @@ def test_start_accepts_any_chat_without_authorization(client, notification_handl
 
 
 @pytest.mark.parametrize("command", ["/start", "/start@DemoBot", "/start ignored-argument"])
-def test_start_upserts_refreshes_metadata_and_preserves_missing_metadata(client, notification_handler, command):
+def test_start_upserts_refreshes_metadata_and_preserves_missing_metadata(
+    client, notification_handler, command
+):
     db = app.dependency_overrides[get_db]()
     assert _telegram_command(client, "/start", username="old", first_name="Original").status_code == 200
     created = db.get(TelegramSubscriber, 9000000001).created_at
@@ -702,14 +856,17 @@ def test_stop_unknown_chat_confirms_without_creating_subscription(client, notifi
     notification_handler.confirm_subscription.assert_called_once_with(9000000001, False)
 
 
-@pytest.mark.parametrize("payload", [
-    {"update_id": 1, "callback_query": {"data": "anything"}},
-    {"update_id": 1},
-    {"update_id": 1, "message": {"chat": {"id": 123, "type": "private"}, "photo": []}},
-    {"update_id": 1, "message": {"chat": {"id": 123, "type": "private"}, "text": "   "}},
-    {"update_id": 1, "message": {"chat": {"id": 123, "type": "private"}, "text": "/help"}},
-    {"update_id": 1, "message": {"chat": {"id": 123, "type": "private"}, "text": "say /start"}},
-])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"update_id": 1, "callback_query": {"data": "anything"}},
+        {"update_id": 1},
+        {"update_id": 1, "message": {"chat": {"id": 123, "type": "private"}, "photo": []}},
+        {"update_id": 1, "message": {"chat": {"id": 123, "type": "private"}, "text": "   "}},
+        {"update_id": 1, "message": {"chat": {"id": 123, "type": "private"}, "text": "/help"}},
+        {"update_id": 1, "message": {"chat": {"id": 123, "type": "private"}, "text": "say /start"}},
+    ],
+)
 def test_other_telegram_updates_are_ignored(client, notification_handler, payload):
     assert client.post("/api/telegram/webhook", json=payload).status_code == 200
     notification_handler.confirm_subscription.assert_not_called()
@@ -767,9 +924,14 @@ def test_confirmation_failure_preserves_subscription_state(client, monkeypatch, 
             raise RuntimeError("private failure")
         return httpx.Response(500, json={"ok": False})
 
-    monkeypatch.setattr("app.notifications.telegram.httpx.Client", lambda **kwargs: original_client(
-        **kwargs, transport=httpx.MockTransport(respond), trust_env=False,
-    ))
+    monkeypatch.setattr(
+        "app.notifications.telegram.httpx.Client",
+        lambda **kwargs: original_client(
+            **kwargs,
+            transport=httpx.MockTransport(respond),
+            trust_env=False,
+        ),
+    )
     handler = NotificationHandler(TelegramClient("synthetic-marker", "https://example.invalid", 1))
     monkeypatch.setattr(notifications, "get_notification_handler", lambda: handler)
     assert _telegram_command(client, command).status_code == 200
@@ -798,11 +960,16 @@ def test_sales_broadcast_to_active_subscribers_only(client, monkeypatch, method,
     monkeypatch.setattr(notifications, "get_notification_handler", lambda: handler)
     assert _sale_action(client, method, path).status_code == status
     assert [entry.args[1] for entry in transport.send_message.call_args_list] == [11, 33]
-    assert transport.send_message.call_args_list[0].args[0] == transport.send_message.call_args_list[1].args[0]
+    assert (
+        transport.send_message.call_args_list[0].args[0] == transport.send_message.call_args_list[1].args[0]
+    )
 
 
 def test_group_chat_metadata_is_supported(client):
-    assert _telegram_command(client, "/start", -1009000000001, type="supergroup", title="Demo Group").status_code == 200
+    assert (
+        _telegram_command(client, "/start", -1009000000001, type="supergroup", title="Demo Group").status_code
+        == 200
+    )
     db = app.dependency_overrides[get_db]()
     subscriber = db.get(TelegramSubscriber, -1009000000001)
     assert subscriber.chat_type == "supergroup" and subscriber.title == "Demo Group"

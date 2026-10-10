@@ -1,5 +1,33 @@
 # Verification
 
+## Historical Toman pricing — 2026-10-07
+
+- Full backend suite: **241 passed**, including 22 historical-pricing integration
+  cases and 44 exchange-service cases. Provider and Telegram calls are mocked;
+  PostgreSQL writes use isolated rolled-back schemas.
+- New sales atomically save USD total, six-decimal rate and two-decimal Toman total.
+  Product/quantity edits reprice; customer-only/no-op edits preserve history.
+  Historical reads and analytics do not fetch a quote or recompute old amounts.
+- Additive migration verified against the configured database. Row-content digests
+  matched before/after for **1,500 sales / 30 products / 100 customers / 2 subscribers**.
+  All existing sales retain null historical fields; no rate was backfilled.
+- Real Uvicorn HTTP smoke test verified startup, two mocked-rate sales with saved
+  totals 200/300, revenue 500, AOV 250 and trend sum 500. Dynamic product display
+  changed to 300 while its USD price stayed 2. All smoke writes/schema rolled back,
+  the server stopped, and public sales were preserved.
+- TypeScript, Vite production build, Ruff, formatting and whitespace checks passed.
+  React/esbuild checks verified exact Decimal-string grouping beyond JavaScript
+  safe integers, fractions, very large chart values and legacy/Toman KPI states.
+- Legacy rows are explicitly unavailable and excluded from money metrics; order/
+  customer counts retain them. Growth is unavailable for incomplete periods.
+  Seed data remains legacy because no trustworthy historical quote data exists.
+- No local environment file, dependency, Telegram transport/subscription/webhook,
+  provider selection, worker, queue or authentication change. No credential added.
+- Authenticated live provider access, real Telegram delivery, live AI and visual
+  browser interaction were not verified. Recharts coordinates are approximate at
+  very large values; product/sale/KPI strings remain exact. TestClient warning remains.
+- [Architecture, complete file inventory, commands and limitations](backend/HISTORICAL_PRICING.md).
+
 ## USD/Toman dashboard display — 2026-10-07
 
 - Full backend suite: **217 passed**, including **42 exchange-rate cases** with

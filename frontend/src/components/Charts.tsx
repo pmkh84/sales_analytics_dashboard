@@ -23,7 +23,7 @@ export function RevenueChart({
   total,
 }: {
   data: TrendPoint[];
-  total: number;
+  total: string;
 }) {
   return (
     <section className="card chart-card">
@@ -78,7 +78,7 @@ export function RevenueChart({
                 axisLine={false}
                 tickLine={false}
                 tick={{ fill: "#8a928e", fontSize: 11 }}
-                width={56}
+                width={85}
               />
               <Tooltip
                 formatter={(value) => [money(Number(value)), "Revenue"]}

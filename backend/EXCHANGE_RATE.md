@@ -1,7 +1,8 @@
 # USD/Toman exchange rate
 
-This feature displays a market quote only. Product prices, sale calculations,
-database records and Telegram subscriptions/notifications retain their existing behavior.
+The card displays a market quote. The shared service also supplies Decimal quotes
+to [historical sale pricing and current product display](HISTORICAL_PRICING.md).
+Telegram subscription behavior is unchanged.
 
 ## Request flow
 
@@ -23,7 +24,7 @@ or requests reach the frontend. No new dependency, worker or Redis service is ne
 [Navasan's official API guide](https://www.navasan.tech/api/webserviceguide/)
 documents the `usd_buy` latest endpoint and its `value` and Unix `timestamp` fields.
 The [official rate page](https://www.navasan.net/dayRates.php?item=usd_buy) labels
-these Tehran market sell quotes in Toman. This is a more suitable regional market
+these Tehran market buy quotes in Toman. This is a more suitable regional market
 quote for this display than an indicative official USD/IRR currency quote.
 
 The adapter explicitly treats this provider as `IRT`, leaving its value unchanged.
@@ -33,6 +34,8 @@ provider adapter is implemented. API output always uses `base=USD`, `quote=IRT`,
 `source=Navasan`. Invalid, nonpositive, nonfinite or excessively large rates and
 missing/invalid/future timestamps are rejected. The update time is provider time,
 serialized as UTC and displayed in Asia/Tehran, with the full date in the tooltip.
+Rates are parsed as Decimal, including JSON numeric values, and serialize as exact
+JSON strings. Sale pricing quantizes the rate to six decimals before saving it.
 
 The [provider's plan page](https://www.navasan.tech/api/) documents a limited trial
 (120 calls/month, two-hour updates, three months) and paid plans. At the default
@@ -76,7 +79,7 @@ Last-known data has no maximum age; it stays explicitly marked stale through an
 outage. `stale=false` means the latest fetch succeeded, not that the market timestamp
 is within the TTL. This distinction avoids inventing a provider update time.
 
-## File inventory
+## Original display-feature file inventory
 
 | File | Change / responsibility |
 | --- | --- |
@@ -117,7 +120,9 @@ npm.cmd run build
 npm.cmd exec -- prettier --check src/App.tsx src/services/api.ts src/types/index.ts src/hooks/useExchangeRate.ts src/components/ExchangeRateCard.tsx src/index.css
 ```
 
-All 217 backend tests passed, including 42 exchange-rate cases. Provider calls are
+The original display-feature baseline had 217 passing backend tests, including 42
+exchange-rate cases. Current pricing results are in
+[VERIFICATION.md](../VERIFICATION.md). Provider calls are
 mocked: parsing, explicit Rial/Toman normalization, TTL boundary/custom TTL,
 concurrency, stale fallback, retry throttling/recovery, missing key, malformed data,
 timeouts, HTTP errors/redirects, endpoint shape and sanitized failures are covered.
@@ -130,10 +135,10 @@ A temporary Uvicorn process on port 18001 verified startup, route registration,
 live database health and missing-key HTTP 503, with provider and Telegram delivery
 disabled for that verification process. It was stopped afterward.
 
-TypeScript, Vite, Ruff, formatting and whitespace checks passed. Scope checks compare
-pre-change file hashes: business models, analytics/sales services, Telegram code,
-sales components and currency formatting are unchanged. Local `.env` files were
-not modified; example credentials remain empty.
+TypeScript, Vite, Ruff, formatting and whitespace checks passed for the original
+display feature. Historical pricing also updates money models, services, UI and
+Telegram formatting as documented in [HISTORICAL_PRICING.md](HISTORICAL_PRICING.md).
+Local `.env` files were not modified.
 
 ## Remaining checks and limitations
 

@@ -1,7 +1,7 @@
 import {
   ArrowDownRight,
   ArrowUpRight,
-  DollarSign,
+  Banknote,
   ShoppingBag,
   Users,
   Wallet,
@@ -13,8 +13,11 @@ export function KpiCards({ summary }: { summary: Summary }) {
   const cards = [
     {
       title: "Total revenue",
-      value: money(summary.total_revenue),
-      icon: DollarSign,
+      value:
+        summary.legacy_orders > 0 && summary.priced_orders === 0
+          ? "Unavailable"
+          : money(summary.total_revenue),
+      icon: Banknote,
       note: "vs. previous period",
       growth: summary.revenue_growth,
     },
@@ -32,9 +35,12 @@ export function KpiCards({ summary }: { summary: Summary }) {
     },
     {
       title: "Average order value",
-      value: preciseMoney(summary.average_order_value),
+      value:
+        summary.legacy_orders > 0 && summary.priced_orders === 0
+          ? "Unavailable"
+          : preciseMoney(summary.average_order_value),
       icon: Wallet,
-      note: "Revenue per order",
+      note: "Revenue per priced order",
     },
   ];
   return (
@@ -54,7 +60,11 @@ export function KpiCards({ summary }: { summary: Summary }) {
           <div className="kpi-note">
             {growth !== undefined &&
               (growth === null ? (
-                <span>No prior revenue</span>
+                <span>
+                  {summary.legacy_orders || summary.previous_legacy_orders
+                    ? "Comparison unavailable (legacy sales)"
+                    : "No prior revenue"}
+                </span>
               ) : (
                 <span className={"growth " + (growth < 0 ? "negative" : "")}>
                   {growth < 0 ? (

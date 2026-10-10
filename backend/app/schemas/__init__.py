@@ -1,29 +1,34 @@
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class Summary(BaseModel):
-    total_revenue: float
+    total_revenue: Decimal
     total_orders: int
     total_customers: int
-    average_order_value: float
+    average_order_value: Decimal
     revenue_growth: float | None
-    previous_revenue: float
+    previous_revenue: Decimal
+    currency: Literal["IRT"] = "IRT"
+    priced_orders: int
+    legacy_orders: int
+    previous_legacy_orders: int
     start_date: date
     end_date: date
 
 
 class TrendPoint(BaseModel):
     date: date
-    revenue: float
+    revenue: Decimal
     orders: int
 
 
 class Category(BaseModel):
     category: str
-    revenue: float
+    revenue: Decimal
     orders: int
     units: int
 
@@ -32,7 +37,7 @@ class TopProduct(BaseModel):
     id: int
     name: str
     category: str
-    revenue: float
+    revenue: Decimal
     units: int
 
 
@@ -44,7 +49,9 @@ class RecentSale(BaseModel):
     product_name: str
     category: str
     quantity: int
-    total_amount: float
+    total_amount: Decimal  # Compatibility: USD, never Toman.
+    exchange_rate_toman: Decimal | None
+    total_amount_toman: Decimal | None
     created_at: datetime
 
 
@@ -65,7 +72,9 @@ class CreateSaleRequest(BaseModel):
 class CreatedSale(CreateSaleRequest):
     model_config = ConfigDict(from_attributes=True)
     id: int
-    total_amount: float
+    total_amount: Decimal
+    exchange_rate_toman: Decimal | None
+    total_amount_toman: Decimal | None
     created_at: datetime
 
 
@@ -76,7 +85,10 @@ class CustomerOption(BaseModel):
 
 
 class ProductOption(CustomerOption):
-    price: float
+    price: Decimal  # Compatibility: USD.
+    price_usd: Decimal
+    price_toman: Decimal | None
+    exchange_rate_stale: bool | None
 
 
 class AskRequest(BaseModel):
@@ -108,7 +120,7 @@ class ExchangeRate(BaseModel):
     model_config = ConfigDict(frozen=True)
     base: Literal["USD"] = "USD"
     quote: Literal["IRT"] = "IRT"
-    rate: float = Field(gt=0, le=1_000_000_000_000, allow_inf_nan=False)
+    rate: Decimal = Field(gt=0, le=1_000_000_000_000, allow_inf_nan=False)
     updated_at: datetime
     source: Literal["Navasan"] = "Navasan"
     stale: bool = False

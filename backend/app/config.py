@@ -8,7 +8,9 @@ from sqlalchemy.engine import make_url
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=Path(__file__).resolve().parents[1] / ".env", extra="ignore", hide_input_in_errors=True,
+        env_file=Path(__file__).resolve().parents[1] / ".env",
+        extra="ignore",
+        hide_input_in_errors=True,
     )
     database_url: str
     frontend_url: str = "http://localhost:5173"
@@ -19,7 +21,7 @@ class Settings(BaseSettings):
     telegram_api_url: str = "https://api.telegram.org"
     telegram_timeout_seconds: float = Field(default=3.0, gt=0, le=30, allow_inf_nan=False)
     exchange_rate_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
-    exchange_rate_api_url: str = "https://api.navasan.tech/latest/?api_key="
+    exchange_rate_api_url: str = "https://api.navasan.tech/latest/"
     exchange_rate_cache_ttl_seconds: int = Field(default=120, ge=1, le=86400)
     exchange_rate_timeout_seconds: float = Field(default=5.0, gt=0, le=30, allow_inf_nan=False)
 
@@ -30,8 +32,12 @@ class Settings(BaseSettings):
 
         url = urlsplit(value)
         if (
-            url.scheme != "https" or not url.netloc or url.username is not None
-            or url.password is not None or url.query or url.fragment
+            url.scheme != "https"
+            or not url.netloc
+            or url.username is not None
+            or url.password is not None
+            or url.query
+            or url.fragment
         ):
             raise ValueError("EXCHANGE_RATE_API_URL must be HTTPS without credentials, query or fragment.")
         return value
@@ -43,8 +49,12 @@ class Settings(BaseSettings):
 
         url = urlsplit(value)
         if (
-            url.scheme != "https" or not url.netloc or url.username is not None
-            or url.password is not None or url.query or url.fragment
+            url.scheme != "https"
+            or not url.netloc
+            or url.username is not None
+            or url.password is not None
+            or url.query
+            or url.fragment
         ):
             raise ValueError("TELEGRAM_API_URL must be an HTTPS URL without credentials, query or fragment.")
         return value.rstrip("/")

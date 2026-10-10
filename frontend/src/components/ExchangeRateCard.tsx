@@ -21,14 +21,14 @@ export function ExchangeRateCard({ revision }: { revision: number }) {
       {data ? (
         <>
           <strong className="exchange-rate-value">
-            {rateFormat.format(data.rate)}{" "}
+            {rateFormat.format(Number(data.rate))}{" "}
             <span lang="fa" dir="rtl">
               تومان
             </span>
           </strong>
           <span
             className="exchange-rate-meta"
-            title={`${data.source} · Tehran market sell rate`}
+            title={`${data.source} · Tehran market buy rate`}
           >
             {data.stale ? (
               <span className="exchange-rate-stale">Last known rate · </span>

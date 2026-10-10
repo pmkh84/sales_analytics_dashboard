@@ -101,6 +101,21 @@ def test_unknown_currency_unit_is_rejected():
         normalize_to_toman("115000", "USD")
 
 
+def test_numeric_json_rate_retains_decimal_precision(settings, provider):
+    provider[0][:] = [
+        httpx.Response(
+            200,
+            content=b'{"usd_buy":{"value":100.123456789012345678,"timestamp":1609459200}}',
+        )
+    ]
+    assert ExchangeRateService(settings).get_rate().rate == Decimal("100.123456789012345678")
+
+
+def test_binary_float_rate_input_is_rejected():
+    with pytest.raises(ProviderError):
+        normalize_to_toman(100.1, "IRT")
+
+
 def test_fresh_cache_is_reused_and_exact_expiry_fetches_again(settings, provider, clock):
     service = ExchangeRateService(settings, lambda: clock[0])
     first = service.get_rate()
@@ -213,7 +228,7 @@ def test_endpoint_response_shape_and_stale_fallback(settings, provider, clock, m
             assert result.json() == {
                 "base": "USD",
                 "quote": "IRT",
-                "rate": 115000,
+                "rate": "115000",
                 "updated_at": datetime.fromtimestamp(TIMESTAMP, timezone.utc)
                 .isoformat()
                 .replace("+00:00", "Z"),

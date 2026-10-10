@@ -168,7 +168,16 @@ export function SaleForm({
             ))}
           </select>
           {selectedProduct && (
-            <p>Unit price: {preciseMoney(selectedProduct.price)}</p>
+            <p>
+              Current unit price:{" "}
+              {selectedProduct.price_toman === null
+                ? "Toman price unavailable"
+                : preciseMoney(selectedProduct.price_toman)}
+              {selectedProduct.exchange_rate_stale && " (last known rate)"}
+              <br />
+              Product or quantity changes use the rate at save time.
+              Customer-only edits preserve the recorded total.
+            </p>
           )}
           <label htmlFor="sale-quantity">Quantity</label>
           <input

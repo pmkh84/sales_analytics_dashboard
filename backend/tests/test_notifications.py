@@ -25,6 +25,10 @@ def isolated_telegram_settings(monkeypatch):
         "TELEGRAM_ENABLED",
         "TELEGRAM_API_URL",
         "TELEGRAM_TIMEOUT_SECONDS",
+        "EXCHANGE_RATE_API_KEY",
+        "EXCHANGE_RATE_API_URL",
+        "EXCHANGE_RATE_CACHE_TTL_SECONDS",
+        "EXCHANGE_RATE_TIMEOUT_SECONDS",
     ):
         monkeypatch.delenv(name, raising=False)
     cached_handler = service.get_notification_handler
@@ -60,6 +64,7 @@ def test_created_message_and_sold_semantics(snapshot):
     assert format_message(SaleCreated(snapshot)) == (
         "\U0001f7e2 Sale Created (Sold)\n\nSale ID: #123\nCustomer ID: #7\n"
         "Product: Laptop (#9)\nCategory: Electronics\nQuantity: 2\nTotal (USD): 1200.00"
+        "\nExchange rate (Toman): Unavailable (legacy)\nTotal (Toman): Unavailable (legacy)"
     )
 
 

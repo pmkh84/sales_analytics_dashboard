@@ -43,15 +43,34 @@ export async function getDashboard(
   const params = { ...range };
   const [summary, trend, categories, products] = await Promise.all([
     api.get<Summary>("/api/dashboard/summary", { params, signal }),
-    api.get<TrendPoint[]>("/api/dashboard/revenue-trend", { params, signal }),
-    api.get<Category[]>("/api/dashboard/categories", { params, signal }),
-    api.get<Product[]>("/api/dashboard/top-products", { params, signal }),
+    api.get<Array<Omit<TrendPoint, "revenue"> & { revenue: string }>>(
+      "/api/dashboard/revenue-trend",
+      { params, signal },
+    ),
+    api.get<Array<Omit<Category, "revenue"> & { revenue: string }>>(
+      "/api/dashboard/categories",
+      { params, signal },
+    ),
+    api.get<Array<Omit<Product, "revenue"> & { revenue: string }>>(
+      "/api/dashboard/top-products",
+      { params, signal },
+    ),
   ]);
   return {
     summary: summary.data,
-    trend: trend.data,
-    categories: categories.data,
-    products: products.data,
+    // Only Recharts coordinates use Number; authoritative money stays Decimal strings.
+    trend: trend.data.map((item) => ({
+      ...item,
+      revenue: Number(item.revenue),
+    })),
+    categories: categories.data.map((item) => ({
+      ...item,
+      revenue: Number(item.revenue),
+    })),
+    products: products.data.map((item) => ({
+      ...item,
+      revenue: Number(item.revenue),
+    })),
   };
 }
 export async function getSales(

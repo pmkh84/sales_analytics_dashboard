@@ -4,12 +4,16 @@ export interface DateRange {
   end_date: string;
 }
 export interface Summary {
-  total_revenue: number;
+  total_revenue: string;
   total_orders: number;
   total_customers: number;
-  average_order_value: number;
+  average_order_value: string;
   revenue_growth: number | null;
-  previous_revenue: number;
+  previous_revenue: string;
+  currency: "IRT";
+  priced_orders: number;
+  legacy_orders: number;
+  previous_legacy_orders: number;
   start_date: string;
   end_date: string;
 }
@@ -39,7 +43,9 @@ export interface Sale {
   product_name: string;
   category: string;
   quantity: number;
-  total_amount: number;
+  total_amount: string; // USD compatibility field
+  exchange_rate_toman: string | null;
+  total_amount_toman: string | null;
   created_at: string;
 }
 export interface SalesPage {
@@ -53,7 +59,10 @@ export interface CustomerOption {
   name: string;
 }
 export interface ProductOption extends CustomerOption {
-  price: number;
+  price: string; // USD compatibility field
+  price_usd: string;
+  price_toman: string | null;
+  exchange_rate_stale: boolean | null;
 }
 export interface CreateSaleRequest {
   customer_id: number;
@@ -62,7 +71,9 @@ export interface CreateSaleRequest {
 }
 export interface CreatedSale extends CreateSaleRequest {
   id: number;
-  total_amount: number;
+  total_amount: string; // USD compatibility field
+  exchange_rate_toman: string | null;
+  total_amount_toman: string | null;
   created_at: string;
 }
 export interface Insight {
@@ -79,7 +90,7 @@ export interface DashboardData {
 export interface ExchangeRate {
   base: "USD";
   quote: "IRT";
-  rate: number;
+  rate: string;
   updated_at: string;
   source: "Navasan";
   stale: boolean;

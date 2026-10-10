@@ -157,7 +157,7 @@ export function SalesTable({
                     <td>{shortDate(sale.created_at)}</td>
                     <td>{sale.quantity}</td>
                     <td className="amount">
-                      {preciseMoney(sale.total_amount)}
+                      {preciseMoney(sale.total_amount_toman)}
                     </td>
                     <td>
                       <button

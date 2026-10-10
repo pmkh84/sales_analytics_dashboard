@@ -23,6 +23,16 @@ def _fields(sale: SaleSnapshot) -> dict[str, str]:
         "Category": _text(sale.category),
         "Quantity": str(sale.quantity),
         "Total (USD)": f"{sale.total_amount:.2f}",
+        "Exchange rate (Toman)": (
+            f"{sale.exchange_rate_toman:,.6f}".rstrip("0").rstrip(".")
+            if sale.exchange_rate_toman is not None
+            else "Unavailable (legacy)"
+        ),
+        "Total (Toman)": (
+            f"{sale.total_amount_toman:,.2f}"
+            if sale.total_amount_toman is not None
+            else "Unavailable (legacy)"
+        ),
     }
 
 

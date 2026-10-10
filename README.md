@@ -12,6 +12,7 @@
 - 100 customers, 30 products, and 1,500 seeded transactions across seven months.
 - No authentication or unnecessary infrastructure.
 - USD/Toman dashboard card with a backend cache and last-known-rate fallback.
+- Historical Toman sale totals and analytics; product base prices remain USD.
 
 ## Architecture
 
@@ -206,9 +207,41 @@ The dev server uses port 5173 strictly. If that port is occupied, stop the exist
 
 For macOS/Linux, use `python3 -m venv .venv`, `.venv/bin/python` (or `../.venv/bin/python` from backend), `cp` instead of `Copy-Item`, and `npm` instead of `npm.cmd`.
 
+## Historical Toman pricing
+
+Product `price` remains USD. A new sale atomically saves its USD `total_amount`,
+the `exchange_rate_toman` used and its historical `total_amount_toman`.
+Changing product or quantity reprices the sale at edit time; customer-only and
+unchanged edits preserve its saved financial values. Sales, analytics and Telegram
+messages read historical Toman totals. Current product display prices use a current
+quote and can change independently.
+
+Money and rates use Decimal and serialize as exact JSON strings. USD retains two
+decimals, saved rates use six decimals, and Toman totals use two decimals with
+half-up rounding. An intentionally stale cached rate is usable. Without a usable
+rate, create/financial update returns HTTP 503 without a partial write.
+
+Apply the additive migration before starting an existing installation:
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe -m app.migrate
+```
+
+The existing seed/launcher also invokes this idempotent migration. Existing sales
+are preserved with null historical rate/Toman fields and shown as legacy/unavailable.
+They are excluded from money metrics; orders/customers still count them. AOV divides
+by priced orders, and growth is unavailable if either period has legacy rows.
+The migration preserves all 1,500 current sales without assigning invented rates.
+Seed dates also lack trustworthy historical quotes, so seed rows remain legacy.
+Resetting/reseeding is not required and does not supply historical rates.
+
+Configure the provider below for new priced sales. See [pricing architecture,
+complete file inventory, precision, commands and limitations](backend/HISTORICAL_PRICING.md).
+
 ## USD / Toman exchange rate
 
-The Dashboard header displays Navasan's Tehran USD sell rate in Toman, with
+The Dashboard header displays Navasan's Tehran USD buy rate in Toman, with
 thousands separators and the provider's update time in Tehran time. This is an
 independent request: loading or provider failure does not block sales analytics.
 
@@ -483,11 +516,11 @@ Question length is 3–1,000 characters; blank questions are rejected. Date rang
 
 ### Metric definitions
 
-- **Revenue:** sum of recorded `total_amount`, in USD. Discounts are already reflected; this is not profit.
+- **Revenue:** sum of persisted `total_amount_toman`, in Toman. Legacy nulls are excluded; this is not profit. Product `price` and sale `total_amount` remain USD compatibility fields.
 - **Order:** one Sale row (one product with a quantity). No separate cart/multi-line order model.
 - **Customers:** distinct customers who purchased in the selected range, not lifetime registrations.
-- **Average order value:** revenue divided by orders; zero with no orders.
-- **Growth:** percentage change against the immediately preceding equal-length date range. Null means the prior revenue was zero; no misleading infinity/100% is invented.
+- **Average order value:** historical Toman revenue divided by `priced_orders`. The UI shows unavailable when all selected sales are legacy.
+- **Growth:** percentage change against the immediately preceding equal-length date range. Null means prior priced revenue was zero or either period has legacy rows, preventing an incomplete comparison.
 - **Trend:** daily/monthly buckets, zero-filled for missing dates; partial months contain only selected dates.
 - **AI:** observes the selected date range. Questions about unavailable periods or causal drivers must acknowledge missing data. Prompts discourage fabricated claims but model factuality is not guaranteed.
 

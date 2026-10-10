@@ -16,6 +16,8 @@ class SaleSnapshot:
     category: str
     quantity: int
     total_amount: Decimal
+    exchange_rate_toman: Decimal | None = None
+    total_amount_toman: Decimal | None = None
 
 
 @dataclass(frozen=True)

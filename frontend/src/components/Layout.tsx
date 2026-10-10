@@ -118,8 +118,8 @@ export function Layout({
         <footer>
           Clarity Analytics{" "}
           <span>
-            Built for better business decisions · All amounts in USD · Dates in
-            UTC
+            Built for better business decisions · Amounts in Toman; legacy
+            totals unavailable · Dates in UTC
           </span>
         </footer>
       </div>

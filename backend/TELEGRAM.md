@@ -80,8 +80,10 @@ After registration, send `/start` to the bot, perform a sale action, then send
 Delivery uses [Telegram's sendMessage API](https://core.telegram.org/bots/api#sendmessage)
 with JSON `chat_id`, `text` and disabled link previews. No parse mode is used:
 product names are plain text, whitespace is collapsed, and names are bounded to
-keep messages below the API's 4096-character limit. Money uses two decimal places
-and USD, matching the existing dashboard. Messages include sale ID, customer ID,
+keep messages below the API's 4096-character limit. Messages show the saved historical
+Toman total, USD base total and saved rate. Legacy rows explicitly show unavailable
+Toman values. Formatting and deletion never fetch a current quote. Money uses two
+decimals; rates display up to six. Messages include sale ID, customer ID,
 product name/ID, category, quantity and total. Customer names/emails, timestamps,
 credentials and raw objects are excluded. Update messages list only changed
 business values with old → new values. An unchanged save gets an explicit
